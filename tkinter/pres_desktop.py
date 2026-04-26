@@ -507,9 +507,9 @@ class HistoryTab(tk.Frame):
                           command=lambda x=f: self._set_filter(x))
             b.pack(side="left", padx=4)
             self._filter_btns[f] = b
-        self._set_filter("all")
+        self._set_filter_style("all")  # just style, no load during build
 
-        # scrollable list
+        # scrollable list — _tx_inner built here
         frame = tk.Frame(self, bg=WHITE)
         frame.pack(fill="both", expand=True, padx=30, pady=4)
         canvas = tk.Canvas(frame, bg=WHITE, highlightthickness=0)
@@ -539,14 +539,17 @@ class HistoryTab(tk.Frame):
             self._month = 1; self._year += 1
         self._update_month_label(); self.load()
 
-    def _set_filter(self, f):
+    def _set_filter_style(self, f):
         self._filter = f
-        for k,b in self._filter_btns.items():
+        for k, b in self._filter_btns.items():
             if k == f:
                 b.config(bg=AMBER, fg=WHITE)
             else:
                 b.config(bg=WHITE, fg=TEXT_MUTE,
                          highlightbackground=CREAM, highlightthickness=1)
+
+    def _set_filter(self, f):
+        self._set_filter_style(f)
         self.load()
 
     def load(self):
@@ -1527,15 +1530,24 @@ class PockiTrackApp(tk.Tk):
         self._tabs["wallets"] = WalletsTab(self._content_area, self._org)
         self._tabs["profile"] = ProfileTab(self._content_area, self._org)
 
-        self._navigate("home")
-        self._sidebar.set_active("home")
+        # Hide all tabs first before navigating
+        for t in self._tabs.values():
+            t.pack_forget()
+
+        self._sidebar.set_active("home")  # triggers _navigate
 
     def _navigate(self, key):
-        for k, t in self._tabs.items():
-            if k == key:
-                t.pack(fill="both", expand=True)
-            else:
-                t.pack_forget()
+        for t in self._tabs.values():
+            t.pack_forget()
+        self._tabs[key].pack(fill="both", expand=True)
+
+        # Reload data when switching tabs
+        if key == "history":
+            self._tabs[key].load()
+        elif key == "wallets":
+            self._tabs[key].load_folders()
+        elif key == "profile":
+            self._tabs[key].load()
 
     def _logout(self):
         if messagebox.askyesno("Logout", "Log out of PockiTrack?"):
