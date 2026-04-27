@@ -41,20 +41,24 @@ supabase = create_client(_supabase_url, _supabase_key)
 # ─────────────────────────────────────────
 # DESIGN TOKENS  (exact match to CSS)
 # ─────────────────────────────────────────
-BG          = "#F5F1E8"   # body / sidebar background
+BG          = "#F5F1E8"
 WHITE       = "#FFFFFF"
-ACTIVE_NAV  = "#A24A00"   # nav-item.active
-AMBER       = "#E59E2C"   # accent / hover
-AMBER_LIGHT = "#F3D58D"   # summary card gradient start
-CREAM       = "#ECDDC6"   # borders / hover bg
+ACTIVE_NAV  = "#A24A00"
+AMBER       = "#E59E2C"
+AMBER_LIGHT = "#F3D58D"
+AMBER_MID   = "#ECB95D"
+CREAM       = "#ECDDC6"
 TEXT_DARK   = "#000000"
 TEXT_MUTE   = "#616161"
 TEXT_GRAY   = "#828282"
 GREEN_OK    = "#2E7D32"
 RED_ERR     = "#C62828"
-FONT_MAIN   = ("Poppins", 10)
-FONT_BOLD   = ("Poppins", 10, "bold")
-FONT_TITLE  = ("Georgia", 22, "italic")
+CARD_BG     = "rgba(255,255,255,0.4)"  # just for reference; Tk uses solid
+CARD_GLASS  = "#F8EDD4"   # semi-transparent amber card approximation
+
+FONT_MAIN:  tuple = ("Poppins", 10)
+FONT_BOLD:  tuple = ("Poppins", 10, "bold")
+FONT_TITLE: tuple = ("Georgia", 22, "italic")
 
 MONTH_KEYS = [
     "august","september","october","november","december",
@@ -303,165 +307,429 @@ class Sidebar(tk.Frame):
 # HOME / DASHBOARD
 # ═══════════════════════════════════════════════════════════
 class HomeTab(tk.Frame):
-    def __init__(self, parent, org):
+    """Dashboard home screen matching the PockiTrack web design."""
+ 
+    def __init__(self, parent, org, supabase_client):
         super().__init__(parent, bg=WHITE)
-        self.org = org
+        self.org      = org
+        self.supabase = supabase_client
         self._build()
         self.load()
-
+ 
+    # ──────────────────────────────────────────────────────
+    # BUILD UI
+    # ──────────────────────────────────────────────────────
     def _build(self):
+        # ── Header ──────────────────────────────────────
         hdr = tk.Frame(self, bg=WHITE)
-        hdr.pack(fill="x", padx=30, pady=(24,0))
+        hdr.pack(fill="x", padx=36, pady=(28, 0))
+ 
         now = datetime.now()
-        tk.Label(hdr, text=f"Hello, {self.org.get('org_name','')}",
-                 bg=WHITE, fg=TEXT_DARK, font=("Georgia", 22, "italic")).pack(anchor="w")
-        tk.Label(hdr, text=now.strftime("%A, %B %d %Y"),
-                 bg=WHITE, fg=TEXT_MUTE, font=("Poppins", 10)).pack(anchor="w")
-
-        # summary cards
-        bar = tk.Frame(self, bg=AMBER_LIGHT, bd=0)
-        bar.pack(fill="x", padx=30, pady=18)
+        org_name = self.org.get("org_name", "")
+ 
+        tk.Label(
+            hdr, text=f"Hello, {org_name}",
+            bg=WHITE, fg=TEXT_DARK,
+            font=("Georgia", 28, "italic"),
+        ).pack(anchor="w")
+ 
+        tk.Label(
+            hdr,
+            text=now.strftime("%A, %B %d"),
+            bg=WHITE, fg=TEXT_MUTE,
+            font=("Poppins", 11, "bold"),
+        ).pack(anchor="w", pady=(2, 0))
+ 
+        # ── Summary wrapper (amber gradient bar) ────────
+        self._build_summary_bar()
+ 
+        # ── Overview row (wallets + transactions) ───────
+        self._build_overview()
+ 
+        # ── Refresh button ──────────────────────────────
+        refresh_row = tk.Frame(self, bg=WHITE)
+        refresh_row.pack(fill="x", padx=36, pady=(6, 14))
+ 
+        tk.Button(
+            refresh_row,
+            text="↻  Refresh",
+            command=self.load,
+            bg=AMBER, fg=WHITE,
+            font=("Poppins", 9),
+            relief="flat", cursor="hand2",
+            activebackground=ACTIVE_NAV, activeforeground=WHITE,
+            padx=16, pady=5,
+        ).pack(side="right")
+ 
+    def _build_summary_bar(self):
+        """Amber gradient summary bar with four glassmorphic sub-cards."""
+        # outer wrapper — approximates the CSS linear-gradient amber bar
+        wrapper = tk.Frame(self, bg=AMBER_MID, bd=0)
+        wrapper.pack(fill="x", padx=36, pady=(18, 0))
+ 
+        # inner frame for the four cards
+        inner = tk.Frame(wrapper, bg=AMBER_MID)
+        inner.pack(fill="x", padx=18, pady=14)
+ 
         self._card_vars = {}
         cards = [
-            ("total_balance",     "Total Balance",       "Php 0.00"),
-            ("income_month",      "Income this month",   "Php 0.00"),
-            ("expenses_month",    "Expenses this month", "Php 0.00"),
-            ("reports_submitted", "Reports submitted",   "0"),
+            ("total_balance",     "Total Balance",         "Php 0.00"),
+            ("income_month",      "Income this month",     "Php 0.00"),
+            ("expenses_month",    "Expenses this month",   "Php 0.00"),
+            ("reports_submitted", "Reports submitted",     "0"),
         ]
+ 
         for key, label, default in cards:
-            c = tk.Frame(bar, bg="#ECB95D", padx=18, pady=14)
-            c.pack(side="left", fill="both", expand=True, padx=6, pady=10)
-            tk.Label(c, text=label, bg="#ECB95D", fg=TEXT_DARK,
-                     font=("Poppins",9,"bold"), wraplength=130).pack(anchor="w")
+            # each card is a rounded semi-transparent amber-white frame
+            card = tk.Frame(
+                inner, bg=CARD_GLASS,
+                highlightbackground="#E8C97A",
+                highlightthickness=1,
+            )
+            card.pack(side="left", fill="both", expand=True, padx=7, pady=2)
+ 
+            tk.Label(
+                card, text=label,
+                bg=CARD_GLASS, fg=TEXT_DARK,
+                font=("Poppins", 9, "bold"),
+                wraplength=150, justify="left",
+            ).pack(anchor="w", padx=16, pady=(12, 2))
+ 
             var = tk.StringVar(value=default)
             self._card_vars[key] = var
-            tk.Label(c, textvariable=var, bg="#ECB95D", fg=TEXT_DARK,
-                     font=("Poppins",12,"bold")).pack(anchor="w", pady=(4,0))
-
-        # overview
-        over = tk.Frame(self, bg=WHITE)
-        over.pack(fill="both", expand=True, padx=30, pady=4)
-
-        # wallets overview
-        wl = tk.Frame(over, bg=WHITE)
-        wl.pack(side="left", fill="both", expand=True, padx=(0,10))
-        tk.Label(wl, text="Wallets Overview", bg=WHITE, fg=TEXT_DARK,
-                 font=("Poppins",12,"bold")).pack(anchor="w", pady=(0,8))
-        self._wallets_box = tk.Frame(wl, bg="#F9F9F9",
-                                     highlightbackground=CREAM,
-                                     highlightthickness=1)
-        self._wallets_box.pack(fill="both", expand=True)
-
-        # recent transactions
-        tr = tk.Frame(over, bg=WHITE)
-        tr.pack(side="left", fill="both", expand=True, padx=(10,0))
-        tk.Label(tr, text="Recent Transactions", bg=WHITE, fg=TEXT_DARK,
-                 font=("Poppins",12,"bold")).pack(anchor="w", pady=(0,8))
-        self._tx_box = tk.Frame(tr, bg="#F9F9F9",
-                                highlightbackground=CREAM,
-                                highlightthickness=1)
-        self._tx_box.pack(fill="both", expand=True)
-
-        styled_btn(self, "↻  Refresh", self.load, bg=AMBER, font=("Poppins",9))\
-            .pack(anchor="e", padx=30, pady=8)
-
+ 
+            tk.Label(
+                card, textvariable=var,
+                bg=CARD_GLASS, fg=TEXT_DARK,
+                font=("Poppins", 13, "bold"),
+            ).pack(anchor="w", padx=16, pady=(0, 12))
+ 
+    def _build_overview(self):
+        """Two-column overview: Wallets Overview + Transaction History."""
+        overview = tk.Frame(self, bg=WHITE)
+        overview.pack(fill="both", expand=True, padx=36, pady=(28, 0))
+ 
+        # ── Left: Wallets Overview ───────────────────────
+        wallets_col = tk.Frame(overview, bg=WHITE)
+        wallets_col.pack(side="left", fill="both", expand=True, padx=(0, 16))
+ 
+        tk.Label(
+            wallets_col, text="Wallets Overview",
+            bg=WHITE, fg=TEXT_DARK,
+            font=("Poppins", 14, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
+ 
+        # scrollable box
+        self._wallets_canvas, self._wallets_inner = self._scrollable_box(wallets_col)
+ 
+        # ── Right: Transaction History ───────────────────
+        tx_col = tk.Frame(overview, bg=WHITE)
+        tx_col.pack(side="left", fill="both", expand=True, padx=(16, 0))
+ 
+        tk.Label(
+            tx_col, text="Transaction History",
+            bg=WHITE, fg=TEXT_DARK,
+            font=("Poppins", 14, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
+ 
+        self._tx_canvas, self._tx_inner = self._scrollable_box(tx_col)
+ 
+    def _scrollable_box(self, parent):
+        """Creates a rounded scrollable box; returns (canvas, inner_frame)."""
+        outer = tk.Frame(
+            parent, bg=WHITE,
+            highlightbackground=CREAM,
+            highlightthickness=1,
+        )
+        outer.pack(fill="both", expand=True)
+ 
+        canvas = tk.Canvas(outer, bg=WHITE, highlightthickness=0)
+        sb     = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        inner  = tk.Frame(canvas, bg=WHITE)
+ 
+        inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=0)
+        sb.pack(side="right", fill="y")
+ 
+        # mouse-wheel scroll
+        def _on_wheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_wheel)
+ 
+        return canvas, inner
+ 
+    # ──────────────────────────────────────────────────────
+    # LOAD DATA
+    # ──────────────────────────────────────────────────────
     def load(self):
         org_id = self.org["id"]
         try:
-            # wallets
-            wres   = supabase.table("wallets").select("id,name")\
-                              .eq("organization_id", org_id).execute()
+            # fetch wallets
+            wres   = self.supabase.table("wallets") \
+                                  .select("id,name") \
+                                  .eq("organization_id", org_id).execute()
             wallets    = wres.data or []
             wallet_ids = [w["id"] for w in wallets]
-
+ 
             income_all = expense_all = income_mo = expense_mo = 0.0
-            now = datetime.now()
-            txs_all = []
-
+            now        = datetime.now()
+            txs_all    = []
+            wallet_stats = {}   # wallet_id -> {income, expense, budget}
+ 
             if wallet_ids:
-                tres = supabase.table("wallet_transactions")\
-                               .select("kind,date_issued,quantity,price,description,wallet_id")\
-                               .in_("wallet_id", wallet_ids).execute()
+                tres = self.supabase.table("wallet_transactions") \
+                                    .select("kind,date_issued,quantity,price,description,particulars,income_type,wallet_id") \
+                                    .in_("wallet_id", wallet_ids).execute()
+ 
                 for tx in (tres.data or []):
                     qty   = int(tx.get("quantity") or 0)
                     price = float(tx.get("price") or 0)
                     amt   = qty * price
-                    if tx.get("kind") == "income":
+                    wid   = tx.get("wallet_id")
+                    kind  = tx.get("kind", "")
+ 
+                    if wid not in wallet_stats:
+                        wallet_stats[wid] = {"income": 0.0, "expense": 0.0, "budget": 0.0}
+ 
+                    if kind == "income":
                         income_all += amt
+                        wallet_stats[wid]["income"] += amt
                     else:
                         expense_all += amt
-                    d = tx.get("date_issued","")[:10]
+                        wallet_stats[wid]["expense"] += amt
+ 
+                    d = tx.get("date_issued", "")[:10]
                     try:
                         dt = datetime.strptime(d, "%Y-%m-%d")
                         if dt.year == now.year and dt.month == now.month:
-                            if tx.get("kind") == "income":
+                            if kind == "income":
                                 income_mo += amt
                             else:
                                 expense_mo += amt
-                    except: pass
+                    except Exception:
+                        pass
                     txs_all.append(tx)
-
-                bres = supabase.table("wallet_budgets").select("amount,wallet_id")\
-                               .in_("wallet_id", wallet_ids).execute()
-                beginning = sum(float(b.get("amount") or 0) for b in (bres.data or []))
+ 
+                bres = self.supabase.table("wallet_budgets") \
+                                    .select("amount,wallet_id") \
+                                    .in_("wallet_id", wallet_ids).execute()
+                beginning = 0.0
+                for b in (bres.data or []):
+                    amt = float(b.get("amount") or 0)
+                    beginning += amt
+                    wid = b.get("wallet_id")
+                    if wid in wallet_stats:
+                        wallet_stats[wid]["budget"] += amt
+ 
                 total_bal = beginning + income_all - expense_all
             else:
                 total_bal = 0.0
-
-            rres = supabase.table("financial_reports")\
-                           .select("id", count="exact")\
-                           .eq("organization_id", org_id)\
-                           .in_("status", ["Submitted","Approved"]).execute()
+ 
+            rres = self.supabase.table("financial_reports") \
+                                .select("id", count="exact") \
+                                .eq("organization_id", org_id) \
+                                .in_("status", ["Submitted", "Approved"]).execute()
             reports = rres.count or 0
-
+ 
+            # ── update summary cards ──
             self._card_vars["total_balance"].set(f"Php {total_bal:,.2f}")
             self._card_vars["income_month"].set(f"Php {income_mo:,.2f}")
             self._card_vars["expenses_month"].set(f"Php {expense_mo:,.2f}")
             self._card_vars["reports_submitted"].set(str(reports))
-
-            # wallets list
-            for w in self._wallets_box.winfo_children(): w.destroy()
-            if wallets:
-                for w in wallets[:5]:
-                    row = tk.Frame(self._wallets_box, bg=WHITE,
-                                   highlightbackground=CREAM, highlightthickness=1)
-                    row.pack(fill="x", padx=8, pady=4)
-                    tk.Label(row, text=f"👛  {w.get('name','')}", bg=WHITE,
-                             fg=TEXT_DARK, font=("Poppins",10,"bold"),
-                             padx=10, pady=8).pack(anchor="w")
-            else:
-                tk.Label(self._wallets_box, text="No wallets yet", bg="#F9F9F9",
-                         fg=TEXT_MUTE, font=("Poppins",10)).pack(pady=30)
-
-            # recent transactions
-            for w in self._tx_box.winfo_children(): w.destroy()
-            recent = sorted(txs_all,
-                            key=lambda x: x.get("date_issued",""),
-                            reverse=True)[:5]
-            if recent:
-                for tx in recent:
-                    qty   = int(tx.get("quantity") or 0)
-                    price = float(tx.get("price") or 0)
-                    amt   = qty * price
-                    kind  = tx.get("kind","")
-                    color = GREEN_OK if kind == "income" else RED_ERR
-                    sign  = "+" if kind == "income" else "-"
-                    row   = tk.Frame(self._tx_box, bg=WHITE,
-                                     highlightbackground=CREAM, highlightthickness=1)
-                    row.pack(fill="x", padx=8, pady=3)
-                    tk.Label(row, text=tx.get("description","")[:30],
-                             bg=WHITE, fg=TEXT_DARK, font=("Poppins",9,"bold"),
-                             padx=10, pady=4).pack(side="left")
-                    tk.Label(row, text=f"{sign}Php {amt:,.2f}",
-                             bg=WHITE, fg=color, font=("Poppins",9,"bold"),
-                             padx=10).pack(side="right")
-            else:
-                tk.Label(self._tx_box, text="No transactions yet",
-                         bg="#F9F9F9", fg=TEXT_MUTE,
-                         font=("Poppins",10)).pack(pady=30)
-
+ 
+            # ── render wallets overview ──
+            self._render_wallets(wallets, wallet_stats)
+ 
+            # ── render recent transactions ──
+            self._render_transactions(txs_all)
+ 
         except Exception as e:
             messagebox.showerror("Dashboard Error", str(e))
+ 
+    # ──────────────────────────────────────────────────────
+    # RENDER WALLETS
+    # ──────────────────────────────────────────────────────
+    def _render_wallets(self, wallets, wallet_stats):
+        for w in self._wallets_inner.winfo_children():
+            w.destroy()
+ 
+        if not wallets:
+            self._empty_state(self._wallets_inner, "No wallets yet",
+                              "Create your first wallet to start tracking your finances")
+            return
+ 
+        for wallet in wallets[:6]:
+            wid    = wallet["id"]
+            stats  = wallet_stats.get(wid, {"income": 0.0, "expense": 0.0, "budget": 0.0})
+            budget = stats["budget"]
+            inc    = stats["income"]
+            exp    = stats["expense"]
+            spent  = exp
+            pct    = min(spent / budget, 1.0) if budget > 0 else 0.0
+ 
+            card = tk.Frame(
+                self._wallets_inner, bg=WHITE,
+                highlightbackground=CREAM,
+                highlightthickness=1,
+            )
+            card.pack(fill="x", padx=10, pady=5)
+ 
+            # wallet name
+            tk.Label(
+                card,
+                text=f"  {wallet.get('name', '')}",
+                bg=WHITE, fg=TEXT_DARK,
+                font=("Poppins", 11, "bold"),
+                anchor="w",
+            ).pack(fill="x", padx=10, pady=(10, 2))
+ 
+            # budget text
+            tk.Label(
+                card,
+                text=f"Budget used",
+                bg=WHITE, fg=TEXT_GRAY,
+                font=("Poppins", 8),
+                anchor="w",
+            ).pack(fill="x", padx=14, pady=(0, 2))
+ 
+            # budget amount right-aligned
+            tk.Label(
+                card,
+                text=f"Php {spent:,.2f} / Php {budget:,.2f}",
+                bg=WHITE, fg=TEXT_DARK,
+                font=("Poppins", 9, "bold"),
+                anchor="e",
+            ).pack(fill="x", padx=14)
+ 
+            # progress bar
+            prog_bg = tk.Frame(card, bg="#F1F1F1", height=7)
+            prog_bg.pack(fill="x", padx=14, pady=(4, 6))
+            prog_bg.pack_propagate(False)
+ 
+            if pct > 0:
+                prog_fill = tk.Frame(prog_bg, bg=ACTIVE_NAV, height=7)
+                prog_fill.place(relx=0, rely=0, relwidth=pct, relheight=1.0)
+ 
+            # income / expense stats
+            stats_row = tk.Frame(card, bg=WHITE)
+            stats_row.pack(fill="x", padx=14, pady=(0, 10))
+ 
+            tk.Label(
+                stats_row,
+                text=f"+Php {inc:,.2f}",
+                bg=WHITE, fg="#C27A23",
+                font=("Poppins", 9, "bold"),
+            ).pack(side="left")
+ 
+            tk.Label(
+                stats_row,
+                text=f"-Php {exp:,.2f}",
+                bg=WHITE, fg="#D18330",
+                font=("Poppins", 9, "bold"),
+            ).pack(side="right")
+ 
+    # ──────────────────────────────────────────────────────
+    # RENDER TRANSACTIONS
+    # ──────────────────────────────────────────────────────
+    def _render_transactions(self, txs_all):
+        for w in self._tx_inner.winfo_children():
+            w.destroy()
+ 
+        recent = sorted(txs_all, key=lambda x: x.get("date_issued", ""), reverse=True)[:8]
+ 
+        if not recent:
+            self._empty_state(self._tx_inner, "No transactions yet",
+                              "Your transaction history will appear here once you add entries")
+            return
+ 
+        for tx in recent:
+            qty   = int(tx.get("quantity") or 0)
+            price = float(tx.get("price") or 0)
+            amt   = qty * price
+            kind  = tx.get("kind", "")
+            color = GREEN_OK if kind == "income" else RED_ERR
+            sign  = "+" if kind == "income" else "-"
+            desc  = tx.get("description") or tx.get("particulars", "—")
+            sub   = tx.get("income_type", "") or kind.capitalize()
+            date  = tx.get("date_issued", "")[:10]
+ 
+            item = tk.Frame(
+                self._tx_inner, bg=WHITE,
+                highlightbackground=CREAM,
+                highlightthickness=1,
+            )
+            item.pack(fill="x", padx=10, pady=4)
+ 
+            # left info block
+            left = tk.Frame(item, bg=WHITE)
+            left.pack(side="left", fill="both", expand=True, padx=12, pady=10)
+ 
+            tk.Label(
+                left, text=desc[:42],
+                bg=WHITE, fg=TEXT_DARK,
+                font=("Poppins", 10, "bold"),
+                anchor="w",
+            ).pack(anchor="w")
+ 
+            tk.Label(
+                left, text=sub,
+                bg=WHITE, fg=TEXT_MUTE,
+                font=("Poppins", 8),
+                anchor="w",
+            ).pack(anchor="w")
+ 
+            tk.Label(
+                left, text=date,
+                bg=WHITE, fg="#999999",
+                font=("Poppins", 8),
+                anchor="w",
+            ).pack(anchor="w")
+ 
+            # right amount
+            tk.Label(
+                item,
+                text=f"{sign}Php {amt:,.2f}",
+                bg=WHITE, fg=color,
+                font=("Poppins", 11, "bold"),
+                padx=14,
+            ).pack(side="right", pady=10)
+ 
+    # ──────────────────────────────────────────────────────
+    # EMPTY STATE CARD
+    # ──────────────────────────────────────────────────────
+    def _empty_state(self, parent, title, subtitle):
+        card = tk.Frame(
+            parent, bg=WHITE,
+            highlightbackground=CREAM,
+            highlightthickness=1,
+        )
+        card.pack(fill="both", expand=True, padx=10, pady=10)
+ 
+        tk.Label(
+            card,
+            text="—",
+            bg=WHITE, fg=CREAM,
+            font=("Poppins", 28, "bold"),
+        ).pack(pady=(30, 4))
+ 
+        tk.Label(
+            card, text=title,
+            bg=WHITE, fg=TEXT_DARK,
+            font=("Poppins", 11, "bold"),
+        ).pack()
+ 
+        tk.Label(
+            card, text=subtitle,
+            bg=WHITE, fg=TEXT_MUTE,
+            font=("Poppins", 9),
+            wraplength=260,
+            justify="center",
+        ).pack(pady=(4, 30))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1525,7 +1793,7 @@ class PockiTrackApp(tk.Tk):
         self._tabs = {}
         self._sidebar = sidebar
 
-        self._tabs["home"]    = HomeTab(   self._content_area, self._org)
+        self._tabs["home"]    = HomeTab(   self._content_area, self._org, supabase)
         self._tabs["history"] = HistoryTab(self._content_area, self._org)
         self._tabs["wallets"] = WalletsTab(self._content_area, self._org)
         self._tabs["profile"] = ProfileTab(self._content_area, self._org)
