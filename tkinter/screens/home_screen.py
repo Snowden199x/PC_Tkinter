@@ -480,4 +480,4 @@ class HomeTab(tk.Frame):
                  font=("Poppins", 11, "bold")).pack()
         tk.Label(card, text=subtitle, bg=WHITE, fg=TEXT_MUTE,
                  font=("Poppins", 9), wraplength=260,
-                 justify="center").pack(pady=(4, 30))
+                 justify="center").pack(pady=(4, 31))
