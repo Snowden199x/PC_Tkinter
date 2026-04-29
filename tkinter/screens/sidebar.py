@@ -43,7 +43,7 @@ def _load_icon(name, size=24):
 
 class Sidebar(tk.Frame):
     def __init__(self, parent, on_navigate, **kwargs):
-        super().__init__(parent, bg=SIDEBAR_BG,
+        super().__init__(parent, bg=BG_CREAM,
                          width=SIDEBAR_W, **kwargs)
         self.pack_propagate(False)
         self._on_nav  = on_navigate
@@ -77,8 +77,8 @@ class Sidebar(tk.Frame):
 
         for key, label in NAV_ITEMS:
             icon_name = ICON_NAMES.get(key, key)
-            ico = _load_icon(icon_name, 22)
-            self._icons[key] = ico          # keep reference
+            ico = _load_icon(icon_name, 28)
+            self._icons[key] = ico  # keep reference
             btn = self._make_nav_btn(nav_frame, key, label, ico)
             self._buttons[key] = btn
 
@@ -94,23 +94,31 @@ class Sidebar(tk.Frame):
         self.set_active("home")
 
     # ── builder ──────────────────────────────────────────────────────
-    def _make_nav_btn(self, parent, key, label, icon=None,
-                      is_logout=False):
-        frame = tk.Frame(parent, bg=SIDEBAR_BG,
-                         cursor="hand2", pady=6)
-        frame.pack(fill="x", padx=6, pady=2)
+    def _make_nav_btn(self, parent, key, label, icon=None, is_logout=False):
+        is_active = key == self._active
+        # Pill-shaped highlight for active
+        pill_bg = AMBER if is_active else SIDEBAR_BG
+        pill_fg = BTN_TEXT if is_active else TEXT_MUTED
+        pill_font = font(10, "bold") if is_active else font(10)
+
+        frame = tk.Frame(parent, bg=SIDEBAR_BG, cursor="hand2")
+        frame.pack(fill="x", padx=0, pady=8)
+
+        pill = tk.Frame(frame, bg=pill_bg, height=44, bd=0)
+        pill.pack(fill=None, expand=False, padx=8, pady=0)
+        pill.pack_propagate(False)
+
+        inner = tk.Frame(pill, bg=pill_bg)
+        inner.pack(fill="both", expand=True, padx=14, pady=0)
 
         if icon:
-            lbl = tk.Label(frame, image=icon, bg=SIDEBAR_BG)
+            lbl_icon = tk.Label(inner, image=icon, bg=pill_bg)
         else:
-            # fallback: first letter
-            lbl = tk.Label(frame, text=label[0], bg=SIDEBAR_BG,
-                           fg="white", font=font(11, "bold"))
-        lbl.pack()
+            lbl_icon = tk.Label(inner, text=label[0], bg=pill_bg, fg=pill_fg, font=pill_font)
+        lbl_icon.pack(side="left")
 
-        tip = tk.Label(frame, text=label, bg=SIDEBAR_BG,
-                       fg=TEXT_MUTED, font=font(7))
-        tip.pack()
+        lbl_text = tk.Label(inner, text=label, bg=pill_bg, fg=pill_fg, font=pill_font)
+        lbl_text.pack(side="left", padx=(10,0))
 
         def _click(e=None):
             if is_logout:
@@ -119,15 +127,17 @@ class Sidebar(tk.Frame):
                 self.set_active(key)
                 self._on_nav(key)
 
-        for w in (frame, lbl, tip):
+        for w in (frame, pill, inner, lbl_icon, lbl_text):
             w.bind("<Button-1>", _click)
             if not is_logout:
                 w.bind("<Enter>", lambda e, f=frame: self._hover(f, True))
                 w.bind("<Leave>", lambda e, f=frame: self._hover(f, False))
 
         frame._key = key
-        frame._icon_lbl = lbl
-        frame._tip_lbl  = tip
+        frame._icon_lbl = lbl_icon
+        frame._tip_lbl  = lbl_text
+        frame._pill     = pill
+        frame._inner    = inner
         return frame
 
     def _hover(self, frame, entering):
@@ -135,6 +145,8 @@ class Sidebar(tk.Frame):
             return
         c = "#4A2510" if entering else SIDEBAR_BG
         frame.config(bg=c)
+        frame._pill.config(bg=c)
+        frame._inner.config(bg=c)
         frame._icon_lbl.config(bg=c)
         frame._tip_lbl.config(bg=c)
 
@@ -143,11 +155,15 @@ class Sidebar(tk.Frame):
         if self._active in self._buttons:
             old = self._buttons[self._active]
             old.config(bg=SIDEBAR_BG)
-            old._icon_lbl.config(bg=SIDEBAR_BG)
-            old._tip_lbl.config(fg=TEXT_MUTED)
+            old._pill.config(bg=SIDEBAR_BG)
+            old._inner.config(bg=SIDEBAR_BG)
+            old._icon_lbl.config(bg=SIDEBAR_BG, fg=TEXT_MUTED, font=font(10))
+            old._tip_lbl.config(bg=SIDEBAR_BG, fg=TEXT_MUTED, font=font(10))
         self._active = key
         if key in self._buttons:
             btn = self._buttons[key]
-            btn.config(bg=SIDEBAR_ACTIVE)
-            btn._icon_lbl.config(bg=SIDEBAR_ACTIVE)
-            btn._tip_lbl.config(fg="white")
+            btn.config(bg=SIDEBAR_BG)
+            btn._pill.config(bg=AMBER)
+            btn._inner.config(bg=AMBER)
+            btn._icon_lbl.config(bg=AMBER, fg=BTN_TEXT, font=font(10, "bold"))
+            btn._tip_lbl.config(bg=AMBER, fg=BTN_TEXT, font=font(10, "bold"))

@@ -305,6 +305,10 @@ class ScrollableFrame(tk.Frame):
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        canvas.bind_all("<MouseWheel>",
-            lambda e: canvas.yview_scroll(
-                int(-1*(e.delta/120)), "units"))
+        def _on_mousewheel(e):
+            try:
+                canvas.yview_scroll(int(-1*(e.delta/120)), "units")
+            except Exception:
+                pass
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>") if e.widget is canvas else None)

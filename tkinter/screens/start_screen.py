@@ -240,6 +240,7 @@ class StartScreen(tk.Frame):
             lambda e: self._cv.configure(scrollregion=self._cv.bbox("all")))
         self._cv.bind_all("<MouseWheel>",
             lambda e: self._cv.yview_scroll(int(-1*(e.delta/120)), "units"))
+        self.bind("<Destroy>", lambda e: self._cv.unbind_all("<MouseWheel>") if e.widget is self else None)
 
         self._header()
         self._hero()

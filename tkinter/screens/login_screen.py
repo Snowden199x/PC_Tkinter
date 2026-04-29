@@ -1,6 +1,9 @@
 import tkinter as tk
 from PIL import Image, ImageTk
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from db import login_organization
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(BASE_DIR, "assets", "images")
@@ -24,40 +27,66 @@ class LoginScreen(tk.Frame):
     # ---------- IMAGE LOADER ----------
     def img(self, name, w=None, h=None):
         path = os.path.join(ASSETS, name)
-        img = Image.open(path)
+        if not os.path.exists(path):
+            return None
+        try:
+            img = Image.open(path)
+            if w and h:
+                img = img.resize((w, h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            self.images[name] = ph
+            return ph
+        except Exception:
+            return None
 
-        if w and h:
-            img = img.resize((w, h))
-
-        ph = ImageTk.PhotoImage(img)
-        self.images[name] = ph
-        return ph
+    # ---------- BASE IMAGE LOADER ----------
+    def base_img(self, name, w=None, h=None):
+        """Load image from BASE_DIR (for pocki_logo.png)"""
+        path = os.path.join(BASE_DIR, name)
+        if not os.path.exists(path):
+            return None
+        try:
+            img = Image.open(path)
+            if w and h:
+                img = img.resize((w, h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            self.images[name] = ph
+            return ph
+        except Exception:
+            return None
 
     # ---------- UI ----------
     def _build(self):
 
         # ===== BACKGROUND =====
         bg_img = self.img("log_in_bg.png")
-        bg_label = tk.Label(self, image=bg_img)
-        bg_label.place(relwidth=1, relheight=1)
+        if bg_img:
+            bg_label = tk.Label(self, image=bg_img)
+            bg_label.place(relwidth=1, relheight=1)
+        else:
+            # Fallback background color if image not found
+            self.configure(bg=BG_COLOR)
 
         # ===== LOGO (TOP LEFT) =====
-        logo_frame = tk.Frame(self, bg="", cursor="hand2")
+        logo_frame = tk.Frame(self, bg=BG_COLOR, cursor="hand2")
         logo_frame.place(x=20, y=15)
 
-        tk.Label(logo_frame,
-                 self.img("../pocki_logo.png", 70, 70),
-                 bg="").pack(side="left")
+        logo_img = self.base_img("pocki_logo.png", 70, 70)
+        if logo_img:
+            tk.Label(logo_frame, image=logo_img, bg=BG_COLOR).pack(side="left")
+        else:
+            tk.Label(logo_frame, text="PT", font=("Poppins", 24, "bold"),
+                     bg=BG_COLOR).pack(side="left")
 
         tk.Label(logo_frame,
                  text="PockiTrack",
                  font=("Poppins", 24, "bold"),
-                 bg="").pack(side="left", padx=8)
+                 bg=BG_COLOR).pack(side="left", padx=8)
 
         logo_frame.bind("<Button-1>", lambda e: self.on_back())
 
         # ===== CENTER CONTAINER =====
-        container = tk.Frame(self, bg="")
+        container = tk.Frame(self, bg=BG_COLOR)
         container.place(relx=0.5, rely=0.5, anchor="center")
 
         # ===== LOGIN BOX =====
@@ -98,6 +127,7 @@ class LoginScreen(tk.Frame):
                                  bd=1,
                                  relief="solid")
         self.username.pack(fill="x", pady=(5, 15), ipady=6)
+        self.username.bind("<Key>", lambda e: self._clear_error())
 
         # PASSWORD
         tk.Label(form,
@@ -106,32 +136,50 @@ class LoginScreen(tk.Frame):
                  fg="#828282",
                  bg="white").pack(anchor="w")
 
-        pw_frame = tk.Frame(form, bg="white")
-        pw_frame.pack(fill="x")
+        pw_frame = tk.Frame(form, bg="white", highlightbackground="#ccc",
+                             highlightthickness=1)
+        pw_frame.pack(fill="x", pady=(5, 0))
 
         self.password = tk.Entry(pw_frame,
                                  show="*",
                                  font=("Poppins", 12),
-                                 bd=1,
-                                 relief="solid")
-        self.password.pack(side="left", fill="x", expand=True, ipady=6)
+                                 bd=0,
+                                 relief="flat",
+                                 bg="white")
+        self.password.pack(side="left", fill="x", expand=True, ipady=6, padx=(4, 0))
+        self.password.bind("<Key>", lambda e: self._clear_error())
 
         self.showing = False
 
+        eye_img = self.img("show_password.png", 20, 20)
         eye_btn = tk.Label(pw_frame,
-                           image=self.img("show_password.png", 20, 20),
+                           image=eye_img if eye_img else "",
+                           text="" if eye_img else "👁",
                            bg="white",
+                           fg="#828282",
+                           font=("Poppins", 12),
                            cursor="hand2")
-        eye_btn.pack(side="right", padx=8)
+        eye_btn.pack(side="right", padx=6)
 
         def toggle():
             self.showing = not self.showing
             self.password.config(show="" if self.showing else "*")
-
             icon = "hide_password.png" if self.showing else "show_password.png"
-            eye_btn.config(image=self.img(icon, 20, 20))
+            new_img = self.img(icon, 20, 20)
+            if new_img:
+                eye_btn.config(image=new_img, text="")
+            else:
+                eye_btn.config(text="⌣" if self.showing else "👁")
 
         eye_btn.bind("<Button-1>", lambda e: toggle())
+
+        # ERROR MESSAGE
+        self.error_lbl = tk.Label(form,
+                                  text="",
+                                  font=("Poppins", 9),
+                                  fg="#e05c5c",
+                                  bg="white")
+        self.error_lbl.pack(anchor="w", pady=(6, 0))
 
         # FORGOT PASSWORD
         tk.Label(form,
@@ -164,27 +212,37 @@ class LoginScreen(tk.Frame):
 
         btn.bind("<Button-1>", lambda e: self.login())
 
+    # ---------- CLEAR ERROR ----------
+    def _clear_error(self):
+        self.error_lbl.config(text="")
+        self.username.config(highlightthickness=0)
+        self.password.master.config(highlightbackground="#ccc")
+
     # ---------- LOGIN LOGIC ----------
     def login(self):
-        user = self.username.get()
-        pw = self.password.get()
+        user = self.username.get().strip()
+        pw = self.password.get().strip()
 
-        # simple test
-        if user == "admin" and pw == "1234":
-            self.on_login_success()
-        else:
-            self.shake()
+        if not user and not pw:
+            self.show_error("Please enter your username and password.")
+            return
+        if not user:
+            self.show_error("Please enter your username.")
+            return
+        if not pw:
+            self.show_error("Please enter your password.")
+            return
 
-    # ---------- SHAKE EFFECT ----------
-    def shake(self):
-        x = self.winfo_x()
+        try:
+            org = login_organization(user, pw)
+            self.error_lbl.config(text="")
+            self.on_login_success(org)
+        except ValueError as e:
+            self.show_error(str(e))
+        except Exception:
+            self.show_error("Connection error. Please try again.")
 
-        def animate(count=0):
-            if count >= 6:
-                self.place(x=x)
-                return
-            offset = (-10 if count % 2 == 0 else 10)
-            self.place(x=x + offset)
-            self.after(50, lambda: animate(count + 1))
-
-        animate()
+    def show_error(self, message):
+        self.error_lbl.config(text=message)
+        self.username.config(highlightbackground="#e05c5c", highlightthickness=1)
+        self.password.master.config(highlightbackground="#e05c5c")
