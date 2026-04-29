@@ -1,80 +1,153 @@
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 """
-sidebar.py — Left navigation sidebar shown after login.
+sidebar.py – left navigation rail for PockiTrack
 """
-
 import tkinter as tk
+from constants import *
+import os
+from PIL import Image, ImageTk
 
-from constants import (
-    BG, WHITE, CREAM,
-    TEXT_DARK, TEXT_MUTE, ACTIVE_NAV,
-    load_icon
-)
+
+ICON_NAMES = {
+    "home":    "dashboard_menu",
+    "history": "navi_history",
+    "wallet":  "navi_wallet",
+    "profile": "navi_profile",
+}
+
+NAV_ITEMS = [
+    ("home",    "Home"),
+    ("history", "History"),
+    ("wallet",  "Wallet"),
+    ("profile", "Profile"),
+]
+
+
+def _load_icon(name, size=24):
+    """Return a PhotoImage for *name* from assets, or None."""
+    path = os.path.join(ASSETS_DIR, f"{name}.png")
+    if not os.path.exists(path):
+        return None
+    try:
+        img = Image.open(path).convert("RGBA").resize(
+            (size, size), Image.LANCZOS)
+        # tint white for dark sidebar
+        r, g, b, a = img.split()
+        white = Image.new("RGB", img.size, (255, 255, 255))
+        white.putalpha(a)
+        return ImageTk.PhotoImage(white)
+    except Exception:
+        return None
 
 
 class Sidebar(tk.Frame):
-    NAV = [
-        ("🏠", "Home",    "home"),
-        ("📋", "History", "history"),
-        ("👛", "Wallets", "wallets"),
-        ("👤", "Profile", "profile"),
-    ]
-
-    def __init__(self, parent, org, on_navigate, on_logout):
-        super().__init__(parent, bg=BG, width=230)
+    def __init__(self, parent, on_navigate, **kwargs):
+        super().__init__(parent, bg=SIDEBAR_BG,
+                         width=SIDEBAR_W, **kwargs)
         self.pack_propagate(False)
-        self.org         = org
-        self.on_navigate = on_navigate
-        self._btns       = {}
-        self._active     = None
+        self._on_nav  = on_navigate
+        self._active  = "home"
+        self._buttons = {}
+        self._icons   = {}
 
-        # Logo
-        logo_frame = tk.Frame(self, bg=BG)
-        logo_frame.pack(anchor="w", padx=14, pady=(14, 0))
-        logo_img = load_icon("pocki_logo.png", (44, 44))
-        if logo_img:
-            lbl = tk.Label(logo_frame, image=logo_img, bg=BG)
-            lbl.image = logo_img
-            lbl.pack(side="left")
-        tk.Label(logo_frame, text="PockiTrack", bg=BG, fg=TEXT_DARK,
-                 font=("Poppins", 16, "bold")).pack(side="left", padx=6)
+        # ── Logo ────────────────────────────────────────────────────
+        logo_path = os.path.join(BASE_DIR, "pocki_logo.png")
+        self._logo_img = None
+        if os.path.exists(logo_path):
+            try:
+                img = Image.open(logo_path).resize((38, 38), Image.LANCZOS)
+                self._logo_img = ImageTk.PhotoImage(img)
+            except Exception:
+                pass
 
-        # Org name
-        tk.Label(self, text=org.get("org_name", ""), bg=BG, fg=TEXT_MUTE,
-                 font=("Poppins", 8), wraplength=200).pack(anchor="w", padx=14, pady=(4, 0))
+        logo_frame = tk.Frame(self, bg=SIDEBAR_BG, pady=18)
+        logo_frame.pack(fill="x")
+        if self._logo_img:
+            tk.Label(logo_frame, image=self._logo_img,
+                     bg=SIDEBAR_BG).pack()
+        else:
+            tk.Label(logo_frame, text="P", bg=AMBER,
+                     fg=BTN_TEXT, font=font(16, "bold"),
+                     width=2, height=1).pack()
 
-        # Nav items
-        nav_frame = tk.Frame(self, bg=BG)
-        nav_frame.pack(anchor="w", padx=0, pady=(20, 0), fill="x")
-        for emoji, label, key in self.NAV:
-            btn = tk.Button(
-                nav_frame, text=f"  {emoji}  {label}",
-                anchor="w", font=("Poppins", 11),
-                bg=BG, fg=TEXT_MUTE, relief="flat",
-                cursor="hand2", bd=0,
-                activebackground=CREAM,
-                command=lambda k=key: self._nav(k),
-            )
-            btn.pack(fill="x", padx=14, pady=3, ipady=8)
-            self._btns[key] = btn
+        # ── Nav items ────────────────────────────────────────────────
+        nav_frame = tk.Frame(self, bg=SIDEBAR_BG)
+        nav_frame.pack(fill="both", expand=True, pady=10)
 
-        # Logout
-        tk.Frame(self, bg=CREAM, height=1).pack(fill="x", padx=20, pady=20)
-        tk.Button(
-            self, text="  ⎋  Logout",
-            anchor="w", font=("Poppins", 11),
-            bg=WHITE, fg=TEXT_MUTE, relief="flat",
-            cursor="hand2", bd=0,
-            activebackground=ACTIVE_NAV,
-            activeforeground=WHITE,
-            command=on_logout,
-        ).pack(fill="x", padx=14, pady=4, ipady=8)
+        for key, label in NAV_ITEMS:
+            icon_name = ICON_NAMES.get(key, key)
+            ico = _load_icon(icon_name, 22)
+            self._icons[key] = ico          # keep reference
+            btn = self._make_nav_btn(nav_frame, key, label, ico)
+            self._buttons[key] = btn
 
-    def _nav(self, key):
-        if self._active and self._active in self._btns:
-            self._btns[self._active].config(bg=BG, fg=TEXT_MUTE)
-        self._btns[key].config(bg=ACTIVE_NAV, fg=WHITE)
-        self._active = key
-        self.on_navigate(key)
+        # ── Logout at bottom ─────────────────────────────────────────
+        logout_ico = _load_icon("logout_icon", 22)
+        self._icons["logout"] = logout_ico
+        self._icons["logout"] = logout_ico
+        bottom = tk.Frame(self, bg=SIDEBAR_BG, pady=14)
+        bottom.pack(fill="x", side="bottom")
+        self._make_nav_btn(bottom, "logout", "Log out",
+                           logout_ico, is_logout=True)
+
+        self.set_active("home")
+
+    # ── builder ──────────────────────────────────────────────────────
+    def _make_nav_btn(self, parent, key, label, icon=None,
+                      is_logout=False):
+        frame = tk.Frame(parent, bg=SIDEBAR_BG,
+                         cursor="hand2", pady=6)
+        frame.pack(fill="x", padx=6, pady=2)
+
+        if icon:
+            lbl = tk.Label(frame, image=icon, bg=SIDEBAR_BG)
+        else:
+            # fallback: first letter
+            lbl = tk.Label(frame, text=label[0], bg=SIDEBAR_BG,
+                           fg="white", font=font(11, "bold"))
+        lbl.pack()
+
+        tip = tk.Label(frame, text=label, bg=SIDEBAR_BG,
+                       fg=TEXT_MUTED, font=font(7))
+        tip.pack()
+
+        def _click(e=None):
+            if is_logout:
+                self._on_nav("logout")
+            else:
+                self.set_active(key)
+                self._on_nav(key)
+
+        for w in (frame, lbl, tip):
+            w.bind("<Button-1>", _click)
+            if not is_logout:
+                w.bind("<Enter>", lambda e, f=frame: self._hover(f, True))
+                w.bind("<Leave>", lambda e, f=frame: self._hover(f, False))
+
+        frame._key = key
+        frame._icon_lbl = lbl
+        frame._tip_lbl  = tip
+        return frame
+
+    def _hover(self, frame, entering):
+        if frame._key == self._active:
+            return
+        c = "#4A2510" if entering else SIDEBAR_BG
+        frame.config(bg=c)
+        frame._icon_lbl.config(bg=c)
+        frame._tip_lbl.config(bg=c)
 
     def set_active(self, key):
-        self._nav(key)
+        # reset old
+        if self._active in self._buttons:
+            old = self._buttons[self._active]
+            old.config(bg=SIDEBAR_BG)
+            old._icon_lbl.config(bg=SIDEBAR_BG)
+            old._tip_lbl.config(fg=TEXT_MUTED)
+        self._active = key
+        if key in self._buttons:
+            btn = self._buttons[key]
+            btn.config(bg=SIDEBAR_ACTIVE)
+            btn._icon_lbl.config(bg=SIDEBAR_ACTIVE)
+            btn._tip_lbl.config(fg="white")
