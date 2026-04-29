@@ -1,122 +1,132 @@
 """
-main.py — Entry point for PockiTrack Desktop (PRES side).
-Run with: python main.py
+main.py – PockiTrack entry point
+Handles app window, screen transitions, and sidebar routing.
 """
+import sys
+import os
+sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "screens"))
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import font as tkfont
 
-from constants import BG, supabase, load_icon
-try:
-    from PIL import Image, ImageTk
-    PIL_OK = True
-except ImportError:
-    PIL_OK = False
-
-import os
-
-from screens.start_screen   import StartScreen
-from screens.login_screen   import LoginWindow
-from screens.home_screen    import HomeTab
-from screens.history_screen import HistoryTab
-from screens.wallet_screen  import WalletsTab
-from screens.profile_screen import ProfileTab
-from screens.sidebar        import Sidebar
+from constants import *
+from screens.sidebar       import Sidebar
+from screens.start_screen  import StartScreen
+from screens.login_screen  import LoginScreen
+from screens.home_screen   import HomeScreen
+from screens.history_screen import HistoryScreen
+from screens.wallet_screen import WalletScreen
+from screens.profile_screen import ProfileScreen
 
 
 class PockiTrackApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PockiTrack")
-        self.geometry("1100x700")
-        self.minsize(900, 600)
-        self.configure(bg=BG)
-        self._set_icon()
-        self._org = None
-        self._show_start()
+        self.title(APP_NAME)
+        self.geometry(f"{WINDOW_W}x{WINDOW_H}")
+        self.resizable(True, True)
+        self.configure(bg=BG_CREAM)
 
-    def _set_icon(self):
+        # ── Load Poppins if available ─────────────────────────────────
+        self._try_load_poppins()
+
+        # ── App state ─────────────────────────────────────────────────
+        self._logged_in = False
+        self._current   = None
+
+        # Outer container
+        self._shell = tk.Frame(self, bg=BG_CREAM)
+        self._shell.pack(fill="both", expand=True)
+
+        # Sidebar (hidden until logged in)
+        self._sidebar = None
+        self._content = tk.Frame(self._shell, bg=BG_CREAM)
+        self._content.pack(side="right", fill="both", expand=True)
+
+        # Start on the start screen
+        self._show("start")
+
+    # ── Poppins font loader ───────────────────────────────────────────
+    def _try_load_poppins(self):
+        """Try to register Poppins from a fonts/ directory if present."""
+        fonts_dir = os.path.join(BASE_DIR, "fonts")
+        if not os.path.isdir(fonts_dir):
+            return
         try:
-            if PIL_OK and os.path.exists("pocki_logo.png"):
-                img   = Image.open("pocki_logo.png").resize((64, 64), Image.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                self.iconphoto(True, photo)
-                self._icon_ref = photo
+            from tkinter import font as tkfont
+            for f in os.listdir(fonts_dir):
+                if f.lower().endswith((".ttf", ".otf")):
+                    path = os.path.join(fonts_dir, f)
+                    self.tk.call("font", "create", f.split(".")[0])
+                    try:
+                        self.tk.call("lappend", "::auto_path", fonts_dir)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
-    def _clear(self):
-        for w in self.winfo_children():
+    # ── Navigation ────────────────────────────────────────────────────
+    def _show(self, screen_name):
+        """Destroy current screen and show the requested one."""
+        # clear content area
+        for w in self._content.winfo_children():
             w.destroy()
 
-    # ── Start / Splash ─────────────────────────────────────
-    def _show_start(self):
-        self._clear()
-        screen = StartScreen(self, on_login_click=self._open_login)
-        screen.pack(fill="both", expand=True)
+        if screen_name == "start":
+            self._hide_sidebar()
+            StartScreen(self._content,
+                        on_login=lambda: self._show("login")).pack(
+                fill="both", expand=True)
 
-    # ── Login ───────────────────────────────────────────────
-    def _open_login(self):
-        LoginWindow(self, on_success=self._on_login_success)
+        elif screen_name == "login":
+            self._hide_sidebar()
+            LoginScreen(self._content,
+                        on_login_success=self._post_login,
+                        on_back=lambda: self._show("start")).pack(
+                fill="both", expand=True)
 
-    def _on_login_success(self, org):
-        self._org = org
-        self._show_main()
+        elif screen_name == "home":
+            self._show_sidebar()
+            HomeScreen(self._content).pack(fill="both", expand=True)
 
-    # ── Main layout ─────────────────────────────────────────
-    def _show_main(self):
-        self._clear()
-        self.title(f"PockiTrack — {self._org.get('org_name', '')}")
+        elif screen_name == "history":
+            self._show_sidebar()
+            HistoryScreen(self._content).pack(fill="both", expand=True)
 
-        root = tk.Frame(self, bg=BG)
-        root.pack(fill="both", expand=True)
+        elif screen_name == "wallet":
+            self._show_sidebar()
+            WalletScreen(self._content).pack(fill="both", expand=True)
 
-        sidebar = Sidebar(
-            root, self._org,
-            on_navigate=self._navigate,
-            on_logout=self._logout,
-        )
-        sidebar.pack(side="left", fill="y")
+        elif screen_name == "profile":
+            self._show_sidebar()
+            ProfileScreen(self._content).pack(fill="both", expand=True)
 
-        self._content_area = tk.Frame(
-            root, bg="white",
-            highlightbackground="#E0E0E0",
-            highlightthickness=0,
-        )
-        self._content_area.pack(side="left", fill="both", expand=True,
-                                padx=20, pady=20)
+        elif screen_name == "logout":
+            self._hide_sidebar()
+            self._logged_in = False
+            self._show("start")
 
-        self._tabs = {
-            "home":    HomeTab(   self._content_area, self._org, supabase),
-            "history": HistoryTab(self._content_area, self._org),
-            "wallets": WalletsTab(self._content_area, self._org),
-            "profile": ProfileTab(self._content_area, self._org),
-        }
+        self._current = screen_name
+        if self._sidebar and screen_name in (
+                "home", "history", "wallet", "profile"):
+            self._sidebar.set_active(screen_name)
 
-        for t in self._tabs.values():
-            t.pack_forget()
+    def _post_login(self):
+        self._logged_in = True
+        self._show("home")
 
-        self._sidebar = sidebar
-        self._sidebar.set_active("home")   # triggers _navigate("home")
+    def _show_sidebar(self):
+        if self._sidebar is None:
+            self._sidebar = Sidebar(self._shell,
+                                    on_navigate=self._show)
+            self._sidebar.pack(side="left", fill="y")
 
-    def _navigate(self, key):
-        for t in self._tabs.values():
-            t.pack_forget()
-        self._tabs[key].pack(fill="both", expand=True)
-
-        # Reload fresh data on every tab switch
-        if key == "history":
-            self._tabs[key].load()
-        elif key == "wallets":
-            self._tabs[key].load_folders()
-        elif key == "profile":
-            self._tabs[key].load()
-
-    def _logout(self):
-        if messagebox.askyesno("Logout", "Log out of PockiTrack?"):
-            self._org = None
-            self.title("PockiTrack")
-            self._show_start()
+    def _hide_sidebar(self):
+        if self._sidebar:
+            self._sidebar.pack_forget()
+            self._sidebar.destroy()
+            self._sidebar = None
 
 
 if __name__ == "__main__":

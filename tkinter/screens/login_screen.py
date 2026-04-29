@@ -1,147 +1,190 @@
-"""
-login_screen.py — Login popup window.
-"""
-
 import tkinter as tk
-from werkzeug.security import check_password_hash
+from PIL import Image, ImageTk
+import os
 
-from constants import (
-    BG, WHITE, CREAM, AMBER, AMBER_LIGHT,
-    TEXT_DARK, TEXT_MUTE, TEXT_GRAY, RED_ERR,
-    supabase, load_icon
-)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ASSETS = os.path.join(BASE_DIR, "assets", "images")
 
+BG_COLOR = "#f7f3eb"
+PRIMARY = "#8B3B08"
+PRIMARY_HOVER = "#E59E2C"
+TEXT_MUTED = "#616161"
+BORDER = "#ddd"
 
-class LoginWindow(tk.Toplevel):
-    def __init__(self, parent, on_success):
-        """
-        parent     : parent Tk window
-        on_success : callback(org_dict) called after successful login
-        """
-        super().__init__(parent)
-        self.on_success = on_success
-        self.title("PockiTrack | Login")
-        self.geometry("460x520")
-        self.resizable(False, False)
-        self.configure(bg=BG)
-        self.grab_set()
+class LoginScreen(tk.Frame):
+    def __init__(self, parent, on_login_success, on_back):
+        super().__init__(parent, bg=BG_COLOR)
+
+        self.on_login_success = on_login_success
+        self.on_back = on_back
+        self.images = {}
+
         self._build()
 
+    # ---------- IMAGE LOADER ----------
+    def img(self, name, w=None, h=None):
+        path = os.path.join(ASSETS, name)
+        img = Image.open(path)
+
+        if w and h:
+            img = img.resize((w, h))
+
+        ph = ImageTk.PhotoImage(img)
+        self.images[name] = ph
+        return ph
+
+    # ---------- UI ----------
     def _build(self):
-        # ── logo top-left ──
-        logo_row = tk.Frame(self, bg=BG)
-        logo_row.place(x=14, y=14)
-        self._set_logo(logo_row)
 
-        # ── white login box ──
-        box = tk.Frame(self, bg=WHITE, bd=0,
-                       highlightbackground="#E0E0E0", highlightthickness=1)
-        box.place(relx=0.5, rely=0.52, anchor="center", width=390, height=400)
+        # ===== BACKGROUND =====
+        bg_img = self.img("log_in_bg.png")
+        bg_label = tk.Label(self, image=bg_img)
+        bg_label.place(relwidth=1, relheight=1)
 
-        tk.Label(box, text="Log in", bg=WHITE, fg=TEXT_DARK,
-                 font=("Poppins", 22, "bold")).pack(pady=(30, 4))
-        tk.Label(box, text="Enter your details to sign in to your account.",
-                 bg=WHITE, fg=TEXT_GRAY, font=("Poppins", 10)).pack(pady=(0, 20))
+        # ===== LOGO (TOP LEFT) =====
+        logo_frame = tk.Frame(self, bg="", cursor="hand2")
+        logo_frame.place(x=20, y=15)
 
-        form = tk.Frame(box, bg=WHITE)
-        form.pack(padx=40, fill="x")
+        tk.Label(logo_frame,
+                 self.img("../pocki_logo.png", 70, 70),
+                 bg="").pack(side="left")
 
-        # Username
-        tk.Label(form, text="Username", bg=WHITE, fg=TEXT_DARK,
-                 font=("Poppins", 9)).pack(anchor="w")
-        self.username_var = tk.StringVar()
-        un_entry = tk.Entry(form, textvariable=self.username_var,
-                            font=("Poppins", 11), relief="flat",
-                            highlightbackground=CREAM, highlightthickness=1)
-        un_entry.pack(fill="x", ipady=6, pady=(2, 12))
-        un_entry.bind("<FocusIn>",  lambda e: un_entry.config(highlightbackground=AMBER))
-        un_entry.bind("<FocusOut>", lambda e: un_entry.config(highlightbackground=CREAM))
+        tk.Label(logo_frame,
+                 text="PockiTrack",
+                 font=("Poppins", 24, "bold"),
+                 bg="").pack(side="left", padx=8)
 
-        # Password
-        tk.Label(form, text="Password", bg=WHITE, fg=TEXT_DARK,
-                 font=("Poppins", 9)).pack(anchor="w")
-        pw_row = tk.Frame(form, bg=WHITE,
-                          highlightbackground=CREAM, highlightthickness=1)
-        pw_row.pack(fill="x", pady=(2, 8))
-        self.pw_var = tk.StringVar()
-        pw_entry = tk.Entry(pw_row, textvariable=self.pw_var,
-                            show="*", font=("Poppins", 11), relief="flat", bd=0)
-        pw_entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(6, 0))
-        pw_entry.bind("<FocusIn>",  lambda e: pw_row.config(highlightbackground=AMBER))
-        pw_entry.bind("<FocusOut>", lambda e: pw_row.config(highlightbackground=CREAM))
+        logo_frame.bind("<Button-1>", lambda e: self.on_back())
 
-        self.show_pw = False
+        # ===== CENTER CONTAINER =====
+        container = tk.Frame(self, bg="")
+        container.place(relx=0.5, rely=0.5, anchor="center")
 
-        def toggle_pw():
-            self.show_pw = not self.show_pw
-            pw_entry.config(show="" if self.show_pw else "*")
-            eye_btn.config(text="🙈" if self.show_pw else "👁")
+        # ===== LOGIN BOX =====
+        box_shadow = tk.Frame(container, bg="#eaeaea")
+        box_shadow.pack()
 
-        eye_btn = tk.Button(pw_row, text="👁", font=("Poppins", 10),
-                            bg=WHITE, relief="flat", cursor="hand2", command=toggle_pw)
-        eye_btn.pack(side="right", padx=4)
+        box = tk.Frame(box_shadow,
+                       bg="white",
+                       padx=40,
+                       pady=35)
+        box.pack(padx=4, pady=4)
 
-        tk.Label(form, text="Forgot password?", bg=WHITE, fg="#A24A00",
-                 font=("Poppins", 9), cursor="hand2").pack(anchor="e", pady=(0, 4))
+        # ===== TITLE =====
+        tk.Label(box,
+                 text="Log in",
+                 font=("Poppins", 28, "bold"),
+                 bg="white").pack(pady=(5, 5))
 
-        self.err_label = tk.Label(box, text="", bg=WHITE, fg=RED_ERR,
-                                  font=("Poppins", 9))
-        self.err_label.pack()
+        tk.Label(box,
+                 text="Enter your details to sign in to your account.",
+                 font=("Poppins", 12),
+                 fg=TEXT_MUTED,
+                 bg="white").pack(pady=(0, 20))
 
-        login_btn = tk.Button(box, text="Log in", command=self._login,
-                              bg=AMBER_LIGHT, fg=TEXT_DARK,
-                              font=("Poppins", 13, "bold"),
-                              relief="flat", cursor="hand2", bd=1,
-                              activebackground=AMBER, activeforeground=WHITE)
-        login_btn.pack(padx=40, fill="x", ipady=6, pady=16)
-        self.bind("<Return>", lambda e: self._login())
+        # ===== FORM =====
+        form = tk.Frame(box, bg="white")
+        form.pack(fill="x")
 
-    def _set_logo(self, parent):
-        logo_img = load_icon("pocki_logo.png", (40, 40))
-        if logo_img:
-            lbl = tk.Label(parent, image=logo_img, bg=BG)
-            lbl.image = logo_img
-            lbl.pack(side="left")
-        tk.Label(parent, text="PockiTrack", bg=BG, fg=TEXT_DARK,
-                 font=("Poppins", 16, "bold")).pack(side="left", padx=6)
+        # USERNAME
+        tk.Label(form,
+                 text="Username",
+                 font=("Poppins", 10),
+                 fg="#828282",
+                 bg="white").pack(anchor="w")
 
-    def _login(self):
-        username = self.username_var.get().strip()
-        password = self.pw_var.get().strip()
+        self.username = tk.Entry(form,
+                                 font=("Poppins", 12),
+                                 bd=1,
+                                 relief="solid")
+        self.username.pack(fill="x", pady=(5, 15), ipady=6)
 
-        if not username or not password:
-            self.err_label.config(text="Please enter username and password.")
-            return
+        # PASSWORD
+        tk.Label(form,
+                 text="Password",
+                 font=("Poppins", 10),
+                 fg="#828282",
+                 bg="white").pack(anchor="w")
 
-        self.err_label.config(text="Logging in…", fg=TEXT_MUTE)
-        self.update_idletasks()
+        pw_frame = tk.Frame(form, bg="white")
+        pw_frame.pack(fill="x")
 
-        try:
-            result = supabase.table("organizations").select("*") \
-                             .eq("username", username).execute()
+        self.password = tk.Entry(pw_frame,
+                                 show="*",
+                                 font=("Poppins", 12),
+                                 bd=1,
+                                 relief="solid")
+        self.password.pack(side="left", fill="x", expand=True, ipady=6)
 
-            if not result.data:
-                self.err_label.config(text="Organization not found.", fg=RED_ERR)
+        self.showing = False
+
+        eye_btn = tk.Label(pw_frame,
+                           image=self.img("show_password.png", 20, 20),
+                           bg="white",
+                           cursor="hand2")
+        eye_btn.pack(side="right", padx=8)
+
+        def toggle():
+            self.showing = not self.showing
+            self.password.config(show="" if self.showing else "*")
+
+            icon = "hide_password.png" if self.showing else "show_password.png"
+            eye_btn.config(image=self.img(icon, 20, 20))
+
+        eye_btn.bind("<Button-1>", lambda e: toggle())
+
+        # FORGOT PASSWORD
+        tk.Label(form,
+                 text="Forgot password?",
+                 fg=PRIMARY,
+                 cursor="hand2",
+                 font=("Poppins", 9),
+                 bg="white").pack(anchor="e", pady=10)
+
+        # ===== BUTTON =====
+        btn = tk.Canvas(box, width=220, height=45,
+                        bg="white", highlightthickness=0)
+        btn.pack(pady=20)
+
+        def draw(color):
+            btn.delete("all")
+            btn.create_oval(0, 0, 45, 45, fill=color, outline=color)
+            btn.create_oval(175, 0, 220, 45, fill=color, outline=color)
+            btn.create_rectangle(22, 0, 198, 45, fill=color, outline=color)
+
+            btn.create_text(110, 22,
+                            text="Log in",
+                            font=("Poppins", 14, "bold"),
+                            fill="black")
+
+        draw("#F3D58D")
+
+        btn.bind("<Enter>", lambda e: draw(PRIMARY_HOVER))
+        btn.bind("<Leave>", lambda e: draw("#F3D58D"))
+
+        btn.bind("<Button-1>", lambda e: self.login())
+
+    # ---------- LOGIN LOGIC ----------
+    def login(self):
+        user = self.username.get()
+        pw = self.password.get()
+
+        # simple test
+        if user == "admin" and pw == "1234":
+            self.on_login_success()
+        else:
+            self.shake()
+
+    # ---------- SHAKE EFFECT ----------
+    def shake(self):
+        x = self.winfo_x()
+
+        def animate(count=0):
+            if count >= 6:
+                self.place(x=x)
                 return
+            offset = (-10 if count % 2 == 0 else 10)
+            self.place(x=x + offset)
+            self.after(50, lambda: animate(count + 1))
 
-            org = result.data[0]
-
-            if org.get("status") == "Archived":
-                self.err_label.config(
-                    text="This account is archived. Contact OSAS.", fg=RED_ERR)
-                return
-
-            stored_hash = org.get("password", "")
-            if not stored_hash:
-                self.err_label.config(text="No password set for this account.", fg=RED_ERR)
-                return
-
-            if not check_password_hash(stored_hash, password):
-                self.err_label.config(text="Incorrect password.", fg=RED_ERR)
-                return
-
-            self.destroy()
-            self.on_success(org)
-
-        except Exception as e:
-            self.err_label.config(text=f"Connection error: {str(e)[:55]}", fg=RED_ERR)
+        animate()
