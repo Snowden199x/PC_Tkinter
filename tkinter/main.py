@@ -34,15 +34,20 @@ class PockiTrackApp(tk.Tk):
         # ── App state ─────────────────────────────────────────────────
         self._logged_in = False
         self._current   = None
+        self._org       = None
 
         # Outer container
         self._shell = tk.Frame(self, bg=BG_CREAM)
         self._shell.pack(fill="both", expand=True)
 
-        # Sidebar (hidden until logged in)
+        # Sidebar placeholder (always packed first so content fills the rest)
+        self._sidebar_slot = tk.Frame(self._shell, bg=BG_CREAM, width=0)
+        self._sidebar_slot.pack(side="left", fill="y")
+        self._sidebar_slot.pack_propagate(False)
+
         self._sidebar = None
         self._content = tk.Frame(self._shell, bg=BG_CREAM)
-        self._content.pack(side="right", fill="both", expand=True)
+        self._content.pack(side="left", fill="both", expand=True)
 
         # Start on the start screen
         self._show("start")
@@ -88,15 +93,15 @@ class PockiTrackApp(tk.Tk):
 
         elif screen_name == "home":
             self._show_sidebar()
-            HomeScreen(self._content).pack(fill="both", expand=True)
+            HomeScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "history":
             self._show_sidebar()
-            HistoryScreen(self._content).pack(fill="both", expand=True)
+            HistoryScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "wallet":
             self._show_sidebar()
-            WalletScreen(self._content).pack(fill="both", expand=True)
+            WalletScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "profile":
             self._show_sidebar()
@@ -112,21 +117,24 @@ class PockiTrackApp(tk.Tk):
                 "home", "history", "wallet", "profile"):
             self._sidebar.set_active(screen_name)
 
-    def _post_login(self):
+    def _post_login(self, org):
         self._logged_in = True
+        self._org = org
         self._show("home")
 
     def _show_sidebar(self):
         if self._sidebar is None:
-            self._sidebar = Sidebar(self._shell,
+            self._sidebar = Sidebar(self._sidebar_slot,
                                     on_navigate=self._show)
-            self._sidebar.pack(side="left", fill="y")
+            self._sidebar.pack(fill="both", expand=True)
+            self._sidebar_slot.config(width=SIDEBAR_W)
 
     def _hide_sidebar(self):
         if self._sidebar:
             self._sidebar.pack_forget()
             self._sidebar.destroy()
             self._sidebar = None
+            self._sidebar_slot.config(width=0)
 
 
 if __name__ == "__main__":

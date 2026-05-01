@@ -32,7 +32,7 @@ def font(size=11, weight="normal", family=FONT_FAMILY):
     return (family, size, weight)
 
 # ── Dimensions ────────────────────────────────────────────────────────────────
-SIDEBAR_W      = 72
+SIDEBAR_W      = 220
 WINDOW_W       = 1100
 WINDOW_H       = 680
 CORNER_R       = 14            # general card radius (for canvas-drawn widgets)
