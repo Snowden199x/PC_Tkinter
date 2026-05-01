@@ -27,9 +27,25 @@ EXPENSE_RED    = "#E05C5C"
 FONT_FAMILY    = "Poppins"
 FONT_FALLBACK  = ("Poppins", "Segoe UI", "Arial")   # tkinter font tuple fallback
 
+# Font weight mapping for Poppins
+FONT_WEIGHTS = {
+    "thin": "Light",
+    "light": "Light",
+    "normal": "normal",
+    "medium": "medium",
+    "semibold": "normal",
+    "bold": "bold",
+    "extrabold": "bold",
+    "black": "bold",
+}
+
 def font(size=11, weight="normal", family=FONT_FAMILY):
     """Return a tkinter-compatible font tuple."""
-    return (family, size, weight)
+    # Map weight to valid tkinter weight
+    tk_weight = FONT_WEIGHTS.get(weight.lower(), "normal")
+    if weight.lower() == "normal" or weight.lower() == "medium":
+        return (family, size)
+    return (family, size, tk_weight)
 
 # ── Dimensions ────────────────────────────────────────────────────────────────
 SIDEBAR_W      = 220

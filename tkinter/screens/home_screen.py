@@ -56,12 +56,43 @@ class HomeScreen(tk.Frame):
         now      = datetime.now()
         month_lbl = now.strftime("%B")
 
-        # ── white content box (matches .content-box) ──────────────────
+        # ── white content box ────────────────────────────────────────────────────
         outer = tk.Frame(self, bg=BG_CREAM, padx=20, pady=16)
         outer.pack(fill="both", expand=True)
 
-        box = tk.Frame(outer, bg=BG_WHITE, padx=30, pady=24)
-        box.pack(fill="both", expand=True)
+        box_canvas = tk.Canvas(outer, bg=BG_CREAM, bd=0, highlightthickness=0)
+        box_canvas.pack(fill="both", expand=True)
+
+        box = tk.Frame(box_canvas, bg=BG_WHITE, padx=30, pady=24)
+        box_win = box_canvas.create_window(0, 0, anchor="nw", window=box)
+
+        def _draw_box_bg(event=None):
+            w = box_canvas.winfo_width()
+            h = box_canvas.winfo_height()
+            if w < 2 or h < 2:
+                return
+            r = 20
+            box_canvas.itemconfig(box_win, width=w - r * 2, height=h - r * 2)
+            box_canvas.coords(box_win, r, r)
+            scale = 4
+            sw, sh = w * scale, h * scale
+            from PIL import Image, ImageDraw
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            cr = int(BG_CREAM.lstrip("#"), 16)
+            bg_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            img_bg = Image.new("RGBA", (sw, sh), bg_rgb + (255,))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1], radius=r * scale,
+                fill=(255, 255, 255, 255))
+            img_bg.paste(img, mask=img)
+            img_bg = img_bg.resize((w, h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img_bg)
+            box_canvas._bg_ph = ph
+            box_canvas.delete("box_bg")
+            box_canvas.create_image(0, 0, anchor="nw", image=ph, tags="box_bg")
+            box_canvas.tag_lower("box_bg")
+
+        box_canvas.bind("<Configure>", _draw_box_bg)
 
         # ── Header ────────────────────────────────────────────────────
         hdr = tk.Frame(box, bg=BG_WHITE)
@@ -77,23 +108,104 @@ class HomeScreen(tk.Frame):
                  font=font(9)).pack(anchor="w")
 
         # ── Amber gradient summary banner ─────────────────────────────
-        banner = tk.Frame(box, bg="#E59E2C", padx=20, pady=16)
-        banner.pack(fill="x", pady=(14, 0))
+        banner_canvas = tk.Canvas(box, bg=BG_WHITE, bd=0, highlightthickness=0, height=100)
+        banner_canvas.pack(fill="x", pady=(14, 0))
+
+        def _draw_banner(event=None):
+            w = banner_canvas.winfo_width()
+            h = banner_canvas.winfo_height()
+            if w < 2 or h < 2:
+                return
+            scale = 4
+            sw, sh, r = w * scale, h * scale, 25 * scale
+            from PIL import Image, ImageDraw
+            c1, c2, c3 = (0xF3, 0xD5, 0x8D), (0xEC, 0xB9, 0x5D), (0xE5, 0x9E, 0x2C)
+            grad = Image.new("RGB", (sw, 1))
+            for x in range(sw):
+                t = x / (sw - 1)
+                if t <= 0.54:
+                    s = t / 0.54
+                    px = tuple(int(c1[i] + (c2[i] - c1[i]) * s) for i in range(3))
+                else:
+                    s = (t - 0.54) / 0.46
+                    px = tuple(int(c2[i] + (c3[i] - c2[i]) * s) for i in range(3))
+                grad.putpixel((x, 0), px)
+            grad = grad.resize((sw, sh), Image.NEAREST)
+            mask = Image.new("L", (sw, sh), 0)
+            ImageDraw.Draw(mask).rounded_rectangle([0, 0, sw-1, sh-1], radius=r, fill=255)
+            result = Image.new("RGBA", (sw, sh), (255, 255, 255, 0))
+            result.paste(grad, mask=mask)
+            result = result.resize((w, h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(result)
+            banner_canvas._ph = ph
+            banner_canvas.delete("banner_bg")
+            banner_canvas.create_image(0, 0, anchor="nw", image=ph, tags="banner_bg")
+            banner_canvas.tag_lower("banner_bg")
+
+        banner_canvas.bind("<Configure>", _draw_banner)
 
         summary_items = [
-            ("Total Balance",            f"₱{d['total_balance']:,.2f}"),
-            (f"Income this {month_lbl}", f"₱{d['income_month']:,.2f}"),
-            (f"Expenses this {month_lbl}",f"₱{d['expense_month']:,.2f}"),
-            ("Reports submitted",         str(d.get("reports", 0))),
+            ("Total Balance",             f"₱{d['total_balance']:,.2f}"),
+            (f"Income this {month_lbl}",  f"₱{d['income_month']:,.2f}"),
+            (f"Expenses this {month_lbl}", f"₱{d['expense_month']:,.2f}"),
+            ("Reports submitted",          str(d.get("reports", 0))),
         ]
+        card_frames = []
         for i, (lbl, val) in enumerate(summary_items):
-            card = tk.Frame(banner, bg="white", padx=14, pady=10)
-            card.grid(row=0, column=i, sticky="nsew", padx=8)
-            banner.columnconfigure(i, weight=1)
-            tk.Label(card, text=lbl, bg="white",
-                     fg="#555555", font=font(8)).pack(anchor="w")
-            tk.Label(card, text=val, bg="white",
-                     fg=TEXT_DARK, font=font(12, "bold")).pack(anchor="w", pady=(4, 0))
+            card_cv = tk.Canvas(banner_canvas, bd=0, highlightthickness=0)
+            lbl_widget = tk.Label(card_cv, text=lbl, fg="#5a3a00", font=font(8, "medium"))
+            val_widget = tk.Label(card_cv, text=val, fg="#3a2000", font=font(12))
+            card_frames.append((i, card_cv, lbl_widget, val_widget))
+
+        def _draw_card(cv, lbl_w, val_w, grad_slice_x, grad_slice_w, card_w, card_h):
+            from PIL import Image, ImageDraw, ImageFilter
+            cv.delete("card_bg")
+            if card_w < 4 or card_h < 4:
+                return
+            scale = 4
+            sw, sh, r = card_w * scale, card_h * scale, 15 * scale
+            c1, c2, c3 = (0xF3, 0xD5, 0x8D), (0xEC, 0xB9, 0x5D), (0xE5, 0x9E, 0x2C)
+            t = (grad_slice_x + grad_slice_w / 2)
+            if t <= 0.54:
+                s = t / 0.54
+                base = tuple(int(c1[i] + (c2[i] - c1[i]) * s) for i in range(3))
+            else:
+                s = (t - 0.54) / 0.46
+                base = tuple(int(c2[i] + (c3[i] - c2[i]) * s) for i in range(3))
+            blended = tuple(int(base[i] * 0.6 + 255 * 0.4) for i in range(3))
+            mask = Image.new("L", (sw, sh), 0)
+            ImageDraw.Draw(mask).rounded_rectangle([0, 0, sw-1, sh-1], radius=r, fill=255)
+            card_img = Image.new("RGBA", (sw, sh), blended + (255,))
+            result = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            result.paste(card_img, mask=mask)
+            result = result.resize((card_w, card_h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(result)
+            cv._ph = ph
+            cv.create_image(0, 0, anchor="nw", image=ph, tags="card_bg")
+            cv.tag_lower("card_bg")
+            hex_bg = "#{:02x}{:02x}{:02x}".format(*blended)
+            cv.config(bg=hex_bg)          # ← fixes the white corner bleed
+            lbl_w.config(bg=hex_bg)
+            val_w.config(bg=hex_bg)
+            lbl_w.place(x=14, y=10)
+            val_w.place(x=14, y=30)
+
+        def _place_cards(event=None):
+            w = banner_canvas.winfo_width()
+            h = banner_canvas.winfo_height()
+            if w < 2 or h < 2:
+                return
+            n = len(card_frames)
+            pad = 12
+            card_w = (w - pad * (n + 1)) // n
+            card_h = h - pad * 2
+            for i, cv, lbl_w, val_w in card_frames:
+                x = pad + i * (card_w + pad)
+                cv.place(x=x, y=pad, width=card_w, height=card_h)
+                t_center = (x + card_w / 2) / w
+                _draw_card(cv, lbl_w, val_w, t_center, card_w / w, card_w, card_h)
+
+        banner_canvas.bind("<Configure>", lambda e: (_draw_banner(e), _place_cards(e)))
 
         # ── Overview row ──────────────────────────────────────────────
         overview = tk.Frame(box, bg=BG_WHITE)
@@ -110,7 +222,7 @@ class HomeScreen(tk.Frame):
         col.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
 
         tk.Label(col, text="Wallets Overview", bg=BG_WHITE,
-                 fg=TEXT_DARK, font=font(11, "bold")).pack(anchor="w", pady=(0, 8))
+                 fg=TEXT_DARK, font=font(11, "medium")).pack(anchor="w", pady=(0, 8))
 
         scroll_outer = tk.Frame(col, bg=BG_WHITE,
                                 highlightbackground=DIVIDER,
@@ -146,7 +258,6 @@ class HomeScreen(tk.Frame):
                         padx=14, pady=12)
         card.pack(fill="x", pady=5, padx=4)
 
-        # icon
         icon_f = tk.Frame(card, bg=BG_WHITE)
         icon_f.pack(side="left", padx=(0, 12))
         if wallet_img:
@@ -154,18 +265,16 @@ class HomeScreen(tk.Frame):
         else:
             tk.Frame(icon_f, bg=color, width=50, height=44).pack()
 
-        # details
         det = tk.Frame(card, bg=BG_WHITE)
         det.pack(side="left", fill="x", expand=True)
 
         tk.Label(det, text=name, bg=BG_WHITE,
-                 fg=TEXT_DARK, font=font(9, "bold"),
+                 fg=TEXT_DARK, font=font(9, "semibold"),
                  anchor="w").pack(anchor="w")
         tk.Label(det, text="Balance", bg=BG_WHITE,
-                 fg="#777777", font=font(8),
+                 fg="#777777", font=font(8, "medium"),
                  anchor="w").pack(anchor="w")
 
-        # progress bar (visual only, fills based on positive balance ratio)
         pb_frame = tk.Frame(det, bg="#F1F1F1", height=8)
         pb_frame.pack(fill="x", pady=(6, 4))
         pb_frame.pack_propagate(False)
@@ -183,9 +292,8 @@ class HomeScreen(tk.Frame):
 
         pb_frame.bind("<Configure>", _draw_bar)
 
-        # balance label
         tk.Label(det, text=f"₱{balance:,.2f}", bg=BG_WHITE,
-                 fg=color, font=font(10, "bold"),
+                 fg=color, font=font(10, "semibold"),
                  anchor="w").pack(anchor="w")
 
     # ── Transaction History panel ─────────────────────────────────────
@@ -194,7 +302,7 @@ class HomeScreen(tk.Frame):
         col.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 
         tk.Label(col, text="Transaction History", bg=BG_WHITE,
-                 fg=TEXT_DARK, font=font(11, "bold")).pack(anchor="w", pady=(0, 8))
+                 fg=TEXT_DARK, font=font(11, "medium")).pack(anchor="w", pady=(0, 8))
 
         scroll_outer = tk.Frame(col, bg=BG_WHITE,
                                 highlightbackground=DIVIDER,
@@ -245,12 +353,11 @@ class HomeScreen(tk.Frame):
                         padx=12, pady=10)
         item.pack(fill="x", pady=4, padx=4)
 
-        # left: description + category + date
         info = tk.Frame(item, bg=BG_WHITE)
         info.pack(side="left", fill="x", expand=True)
 
         tk.Label(info, text=desc, bg=BG_WHITE,
-                 fg=TEXT_DARK, font=font(9, "bold"),
+                 fg=TEXT_DARK, font=font(9, "semibold"),
                  anchor="w").pack(anchor="w")
         tk.Label(info, text=cat, bg=BG_WHITE,
                  fg=TEXT_MUTED, font=font(8),
@@ -259,10 +366,9 @@ class HomeScreen(tk.Frame):
                  fg="#999999", font=font(7),
                  anchor="w").pack(anchor="w")
 
-        # right: amount
         color = INCOME_GREEN if amount >= 0 else EXPENSE_RED
         sign  = "+" if amount >= 0 else "-"
         tk.Label(item,
                  text=f"{sign}₱{abs(amount):,.2f}",
                  bg=BG_WHITE, fg=color,
-                 font=font(10, "bold")).pack(side="right")
+                 font=font(10, "semibold")).pack(side="right")

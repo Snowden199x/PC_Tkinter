@@ -55,21 +55,24 @@ class PockiTrackApp(tk.Tk):
     # ── Poppins font loader ───────────────────────────────────────────
     def _try_load_poppins(self):
         """Try to register Poppins from a fonts/ directory if present."""
-        fonts_dir = os.path.join(BASE_DIR, "fonts")
+        fonts_dir = os.path.join(BASE_DIR, "assets", "fonts")
         if not os.path.isdir(fonts_dir):
             return
         try:
-            from tkinter import font as tkfont
+            # Windows: Add font using GDI
             for f in os.listdir(fonts_dir):
-                if f.lower().endswith((".ttf", ".otf")):
-                    path = os.path.join(fonts_dir, f)
-                    self.tk.call("font", "create", f.split(".")[0])
+                if f.lower().endswith(".ttf"):
+                    font_path = os.path.join(fonts_dir, f)
                     try:
-                        self.tk.call("lappend", "::auto_path", fonts_dir)
+                        from ctypes import windll
+                        windll.gdi32.AddFontResourceW(font_path)
+                        windll.user32.SendMessageW(0xFFFF, 0x001D, 0, 0)
                     except Exception:
                         pass
         except Exception:
             pass
+        except Exception as e:
+            print(f"Font loading note: {e}")
 
     # ── Navigation ────────────────────────────────────────────────────
     def _show(self, screen_name):
