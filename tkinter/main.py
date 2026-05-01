@@ -97,11 +97,11 @@ class PockiTrackApp(tk.Tk):
 
         elif screen_name == "history":
             self._show_sidebar()
-            HistoryScreen(self._content).pack(fill="both", expand=True)
+            HistoryScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "wallet":
             self._show_sidebar()
-            WalletScreen(self._content).pack(fill="both", expand=True)
+            WalletScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "profile":
             self._show_sidebar()

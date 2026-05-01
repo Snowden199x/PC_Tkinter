@@ -1,169 +1,205 @@
 import sys, os as _os
 sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-"""
-sidebar.py – left navigation rail for PockiTrack
-"""
+
 import tkinter as tk
 from constants import *
-import os
 from PIL import Image, ImageTk
 
-
-ICON_NAMES = {
-    "home":    "dashboard_menu",
-    "history": "navi_history",
-    "wallet":  "navi_wallet",
-    "profile": "navi_profile",
-}
+# ── colours matching the web CSS ─────────────────────────────────────────────
+_BG          = "#F5F1E8"   # sidebar / page background
+_NAV_FG      = "#616161"   # inactive label colour
+_NAV_ACTIVE  = "#A24A00"   # active pill background
+_NAV_HOVER   = "#ECDDC6"   # hover pill background
+_LOGOUT_BG   = "#FFFFFF"   # logout button background
+_LOGOUT_FG   = "#616161"
 
 NAV_ITEMS = [
-    ("home",    "Home"),
-    ("history", "History"),
-    ("wallet",  "Wallet"),
-    ("profile", "Profile"),
+    ("home",    "Home",    "dashboard_menu.png"),
+    ("history", "History", "navi_history.png"),
+    ("wallet",  "Wallets", "navi_wallet.png"),
+    ("profile", "Profile", "navi_profile.png"),
 ]
 
 
-def _load_icon(name, size=24):
-    """Return a PhotoImage for *name* from assets, or None."""
-    path = os.path.join(ASSETS_DIR, f"{name}.png")
-    if not os.path.exists(path):
+def _load(path, w, h, tint=None):
+    """Load & resize an image; optionally tint to a solid colour."""
+    if not _os.path.exists(path):
         return None
     try:
-        img = Image.open(path).convert("RGBA").resize(
-            (size, size), Image.LANCZOS)
-        # tint white for dark sidebar
-        r, g, b, a = img.split()
-        white = Image.new("RGB", img.size, (255, 255, 255))
-        white.putalpha(a)
-        return ImageTk.PhotoImage(white)
+        img = Image.open(path).convert("RGBA").resize((w, h), Image.LANCZOS)
+        if tint:
+            r, g, b = int(tint[1:3], 16), int(tint[3:5], 16), int(tint[5:7], 16)
+            coloured = Image.new("RGBA", img.size, (r, g, b, 255))
+            coloured.putalpha(img.split()[3])
+            img = coloured
+        return ImageTk.PhotoImage(img)
     except Exception:
         return None
 
 
 class Sidebar(tk.Frame):
     def __init__(self, parent, on_navigate, **kwargs):
-        super().__init__(parent, bg=BG_CREAM,
-                         width=SIDEBAR_W, **kwargs)
+        super().__init__(parent, bg=_BG, width=SIDEBAR_W, **kwargs)
         self.pack_propagate(False)
         self._on_nav  = on_navigate
         self._active  = "home"
-        self._buttons = {}
-        self._icons   = {}
+        self._btns    = {}
+        self._imgs    = []          # keep PhotoImage refs alive
 
-        # ── Logo ────────────────────────────────────────────────────
-        logo_path = os.path.join(BASE_DIR, "pocki_logo.png")
-        self._logo_img = None
-        if os.path.exists(logo_path):
-            try:
-                img = Image.open(logo_path).resize((38, 38), Image.LANCZOS)
-                self._logo_img = ImageTk.PhotoImage(img)
-            except Exception:
-                pass
-
-        logo_frame = tk.Frame(self, bg=SIDEBAR_BG, pady=18)
-        logo_frame.pack(fill="x")
-        if self._logo_img:
-            tk.Label(logo_frame, image=self._logo_img,
-                     bg=SIDEBAR_BG).pack()
-        else:
-            tk.Label(logo_frame, text="P", bg=AMBER,
-                     fg=BTN_TEXT, font=font(16, "bold"),
-                     width=2, height=1).pack()
-
-        # ── Nav items ────────────────────────────────────────────────
-        nav_frame = tk.Frame(self, bg=SIDEBAR_BG)
-        nav_frame.pack(fill="both", expand=True, pady=10)
-
-        for key, label in NAV_ITEMS:
-            icon_name = ICON_NAMES.get(key, key)
-            ico = _load_icon(icon_name, 28)
-            self._icons[key] = ico  # keep reference
-            btn = self._make_nav_btn(nav_frame, key, label, ico)
-            self._buttons[key] = btn
-
-        # ── Logout at bottom ─────────────────────────────────────────
-        logout_ico = _load_icon("logout_icon", 22)
-        self._icons["logout"] = logout_ico
-        self._icons["logout"] = logout_ico
-        bottom = tk.Frame(self, bg=SIDEBAR_BG, pady=14)
-        bottom.pack(fill="x", side="bottom")
-        self._make_nav_btn(bottom, "logout", "Log out",
-                           logout_ico, is_logout=True)
-
+        self._build_logo()
+        self._build_nav()
+        self._build_logout()
         self.set_active("home")
 
-    # ── builder ──────────────────────────────────────────────────────
-    def _make_nav_btn(self, parent, key, label, icon=None, is_logout=False):
-        is_active = key == self._active
-        # Pill-shaped highlight for active
-        pill_bg = AMBER if is_active else SIDEBAR_BG
-        pill_fg = BTN_TEXT if is_active else TEXT_MUTED
-        pill_font = font(10, "bold") if is_active else font(10)
+    # ── Logo ─────────────────────────────────────────────────────────
+    def _build_logo(self):
+        logo_path = _os.path.join(BASE_DIR, "pocki_logo.png")
+        ph = _load(logo_path, 44, 44)
+        if ph:
+            self._imgs.append(ph)
 
-        frame = tk.Frame(parent, bg=SIDEBAR_BG, cursor="hand2")
-        frame.pack(fill="x", padx=0, pady=8)
+        frm = tk.Frame(self, bg=_BG, pady=14, padx=14)
+        frm.pack(fill="x")
 
-        pill = tk.Frame(frame, bg=pill_bg, height=44, bd=0)
-        pill.pack(fill=None, expand=False, padx=8, pady=0)
+        if ph:
+            tk.Label(frm, image=ph, bg=_BG).pack(side="left")
+        tk.Label(frm, text="PockiTrack", bg=_BG,
+                 fg="#000000", font=font(14, "bold")).pack(side="left", padx=(8, 0))
+
+    # ── Nav items ─────────────────────────────────────────────────────
+    def _build_nav(self):
+        self._nav_frame = tk.Frame(self, bg=_BG, padx=10)
+        self._nav_frame.pack(fill="x", pady=(10, 0))
+
+        for key, label, icon_file in NAV_ITEMS:
+            icon_path = _os.path.join(ASSETS_DIR, icon_file)
+            # load dark-tinted icon for inactive state
+            ico_dark  = _load(icon_path, 22, 22, tint="#616161")
+            # load white-tinted icon for active state
+            ico_white = _load(icon_path, 22, 22, tint="#FFFFFF")
+            if ico_dark:
+                self._imgs.append(ico_dark)
+            if ico_white:
+                self._imgs.append(ico_white)
+
+            btn = self._make_pill(self._nav_frame, key, label,
+                                  ico_dark, ico_white)
+            self._btns[key] = btn
+
+    def _make_pill(self, parent, key, label, ico_dark, ico_white):
+        # outer frame (cream bg, full width)
+        outer = tk.Frame(parent, bg=_BG, cursor="hand2")
+        outer.pack(fill="x", pady=4)
+
+        # pill frame — 226×46, radius faked with padx/pady + bg colour
+        pill = tk.Frame(outer, bg=_BG, height=46)
+        pill.pack(fill="x")
         pill.pack_propagate(False)
 
-        inner = tk.Frame(pill, bg=pill_bg)
-        inner.pack(fill="both", expand=True, padx=14, pady=0)
+        inner = tk.Frame(pill, bg=_BG)
+        inner.place(relx=0, rely=0.5, anchor="w", x=12)
 
-        if icon:
-            lbl_icon = tk.Label(inner, image=icon, bg=pill_bg)
-        else:
-            lbl_icon = tk.Label(inner, text=label[0], bg=pill_bg, fg=pill_fg, font=pill_font)
+        lbl_icon = tk.Label(inner, bg=_BG,
+                            image=ico_dark if ico_dark else "",
+                            text="" if ico_dark else label[0],
+                            fg=_NAV_FG, font=font(11))
         lbl_icon.pack(side="left")
 
-        lbl_text = tk.Label(inner, text=label, bg=pill_bg, fg=pill_fg, font=pill_font)
-        lbl_text.pack(side="left", padx=(10,0))
+        lbl_text = tk.Label(inner, text=label, bg=_BG,
+                            fg=_NAV_FG, font=font(11, "bold"))
+        lbl_text.pack(side="left", padx=(10, 0))
+
+        # store refs for set_active / hover
+        outer._key       = key
+        outer._pill      = pill
+        outer._inner     = inner
+        outer._lbl_icon  = lbl_icon
+        outer._lbl_text  = lbl_text
+        outer._ico_dark  = ico_dark
+        outer._ico_white = ico_white
 
         def _click(e=None):
-            if is_logout:
-                self._on_nav("logout")
-            else:
-                self.set_active(key)
-                self._on_nav(key)
+            self.set_active(key)
+            self._on_nav(key)
 
-        for w in (frame, pill, inner, lbl_icon, lbl_text):
+        def _enter(e):
+            if key != self._active:
+                self._set_pill_style(outer, _NAV_HOVER, _NAV_FG, "dark")
+
+        def _leave(e):
+            if key != self._active:
+                self._set_pill_style(outer, _BG, _NAV_FG, "dark")
+
+        for w in (outer, pill, inner, lbl_icon, lbl_text):
             w.bind("<Button-1>", _click)
-            if not is_logout:
-                w.bind("<Enter>", lambda e, f=frame: self._hover(f, True))
-                w.bind("<Leave>", lambda e, f=frame: self._hover(f, False))
+            w.bind("<Enter>",    _enter)
+            w.bind("<Leave>",    _leave)
 
-        frame._key = key
-        frame._icon_lbl = lbl_icon
-        frame._tip_lbl  = lbl_text
-        frame._pill     = pill
-        frame._inner    = inner
-        return frame
+        return outer
 
-    def _hover(self, frame, entering):
-        if frame._key == self._active:
-            return
-        c = "#4A2510" if entering else SIDEBAR_BG
-        frame.config(bg=c)
-        frame._pill.config(bg=c)
-        frame._inner.config(bg=c)
-        frame._icon_lbl.config(bg=c)
-        frame._tip_lbl.config(bg=c)
+    # ── Logout ────────────────────────────────────────────────────────
+    def _build_logout(self):
+        logout_path = _os.path.join(ASSETS_DIR, "logout_icon.png")
+        ico = _load(logout_path, 20, 20, tint="#616161")
+        if ico:
+            self._imgs.append(ico)
+
+        bottom = tk.Frame(self, bg=_BG, padx=14, pady=20)
+        bottom.pack(side="bottom", fill="x")
+
+        btn = tk.Frame(bottom, bg=_LOGOUT_BG, height=45,
+                       cursor="hand2",
+                       highlightbackground="#E0D4C0",
+                       highlightthickness=1)
+        btn.pack(fill="x")
+        btn.pack_propagate(False)
+
+        inner = tk.Frame(btn, bg=_LOGOUT_BG)
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+
+        if ico:
+            tk.Label(inner, image=ico, bg=_LOGOUT_BG).pack(side="left")
+        tk.Label(inner, text="Log out", bg=_LOGOUT_BG,
+                 fg=_LOGOUT_FG, font=font(10, "bold")).pack(side="left", padx=(8, 0))
+
+        def _logout_click(e=None):
+            self._on_nav("logout")
+
+        def _logout_enter(e):
+            btn.config(bg="#A24A00", highlightbackground="#A24A00")
+            inner.config(bg="#A24A00")
+            for w in inner.winfo_children():
+                w.config(bg="#A24A00", fg="white")
+
+        def _logout_leave(e):
+            btn.config(bg=_LOGOUT_BG, highlightbackground="#E0D4C0")
+            inner.config(bg=_LOGOUT_BG)
+            for w in inner.winfo_children():
+                w.config(bg=_LOGOUT_BG, fg=_LOGOUT_FG)
+
+        for w in (btn, inner) + tuple(inner.winfo_children()):
+            w.bind("<Button-1>", _logout_click)
+            w.bind("<Enter>",    _logout_enter)
+            w.bind("<Leave>",    _logout_leave)
+
+    # ── helpers ───────────────────────────────────────────────────────
+    def _set_pill_style(self, btn, bg, fg, icon_state):
+        ico = btn._ico_white if icon_state == "white" else btn._ico_dark
+        btn.config(bg=bg)
+        btn._pill.config(bg=bg)
+        btn._inner.config(bg=bg)
+        btn._lbl_icon.config(bg=bg, fg=fg,
+                             image=ico if ico else "",
+                             text="" if ico else btn._key[0])
+        btn._lbl_text.config(bg=bg, fg=fg)
 
     def set_active(self, key):
-        # reset old
-        if self._active in self._buttons:
-            old = self._buttons[self._active]
-            old.config(bg=SIDEBAR_BG)
-            old._pill.config(bg=SIDEBAR_BG)
-            old._inner.config(bg=SIDEBAR_BG)
-            old._icon_lbl.config(bg=SIDEBAR_BG, fg=TEXT_MUTED, font=font(10))
-            old._tip_lbl.config(bg=SIDEBAR_BG, fg=TEXT_MUTED, font=font(10))
+        # deactivate old
+        if self._active in self._btns:
+            self._set_pill_style(self._btns[self._active], _BG, _NAV_FG, "dark")
+
         self._active = key
-        if key in self._buttons:
-            btn = self._buttons[key]
-            btn.config(bg=SIDEBAR_BG)
-            btn._pill.config(bg=AMBER)
-            btn._inner.config(bg=AMBER)
-            btn._icon_lbl.config(bg=AMBER, fg=BTN_TEXT, font=font(10, "bold"))
-            btn._tip_lbl.config(bg=AMBER, fg=BTN_TEXT, font=font(10, "bold"))
+
+        # activate new
+        if key in self._btns:
+            self._set_pill_style(self._btns[key], _NAV_ACTIVE, "#FFFFFF", "white")
