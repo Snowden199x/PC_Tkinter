@@ -1,8 +1,3 @@
-"""
-constants.py — Shared design tokens, style helpers, supabase client, and icon loader.
-Import this in every screen file.
-"""
-
 import os
 import tkinter as tk
 from tkinter import ttk

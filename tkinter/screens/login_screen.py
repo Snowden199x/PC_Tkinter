@@ -1,7 +1,3 @@
-"""
-login_screen.py — Login popup window.
-"""
-
 import tkinter as tk
 from werkzeug.security import check_password_hash
 

@@ -1,22 +1,3 @@
-"""
-home_screen.py — Dashboard / Home tab.
-Matches the PockiTrack web design (homepage.html + homepage.css) as closely as possible in Tkinter.
-
-Layout mirror:
-  ┌─────────────────────────────────────────────────────┐
-  │  Hello, {org_name}          (Georgia italic, large) │
-  │  Monday, April 28           (Poppins, muted)        │
-  ├─────────────────────────────────────────────────────┤
-  │  ░░░░ Amber gradient summary bar ░░░░░░░░░░░░░░░░░  │
-  │  [ Total Balance ] [ Income ] [ Expenses ] [Reports]│
-  ├──────────────────┬──────────────────────────────────┤
-  │  Wallets         │  Transaction History             │
-  │  Overview        │                                  │
-  │  (scrollable)    │  (scrollable)                    │
-  └──────────────────┴──────────────────────────────────┘
-                                          [ ↻ Refresh ]
-"""
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
