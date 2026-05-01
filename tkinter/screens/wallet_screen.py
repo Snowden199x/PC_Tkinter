@@ -1,551 +1,664 @@
-"""
-wallet_screen.py — Wallets tab and Add Transaction dialog.
-"""
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from constants import *
 from datetime import datetime
+from PIL import Image, ImageTk
+from db import (get_wallets, get_wallet_transactions,
+                get_wallet_receipts, get_wallet_reports, get_wallet_budget)
 
-from constants import (
-    WHITE, CREAM, AMBER, AMBER_LIGHT,
-    TEXT_DARK, TEXT_MUTE, ACTIVE_NAV, GREEN_OK, RED_ERR,
-    styled_btn, supabase
-)
+_ASSETS      = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "assets", "images")
+_CARD_COLORS = ["#F3D58D","#D4E8C2","#C2D4E8","#E8C2D4","#D4C2E8","#C2E8D4","#E8D4C2"]
+_INCOME_CLR  = "#2E7D32"
+_EXPENSE_CLR = "#C62828"
+_ACTIVE_TAB  = "#E59E2C"
+_FILTER_ACT  = "#E59E2C"
+_FILTER_BDR  = "#ECDDC6"
+_BTN_BROWN   = "#A24A00"
+_BTN_HOV     = "#8B3A00"
 
 
-# ═══════════════════════════════════════════════════════════
-# WALLETS TAB
-# ═══════════════════════════════════════════════════════════
-class WalletsTab(tk.Frame):
-    def __init__(self, parent, org):
-        super().__init__(parent, bg=WHITE)
-        self.org          = org
-        self._folders     = []
-        self._sel_folder  = None
-        self._tx_filter   = "all"
+def _img(name, w, h, cache):
+    path = _os.path.join(_ASSETS, name)
+    if not _os.path.exists(path):
+        return None
+    try:
+        ph = ImageTk.PhotoImage(Image.open(path).resize((w, h), Image.LANCZOS))
+        cache.append(ph)
+        return ph
+    except Exception:
+        return None
+
+
+class WalletScreen(tk.Frame):
+    def __init__(self, parent, org=None, **kwargs):
+        super().__init__(parent, bg=BG_CREAM, **kwargs)
+        self._org   = org or {}
+        self._imgs  = []
+        self._view  = "list"          # "list" | "detail"
+        self._wallet = None           # selected wallet dict
         self._build()
-        self._show_list()
-        self.load_folders()
 
+    # ── outer scaffold ────────────────────────────────────────────────
     def _build(self):
-        # ── LIST VIEW ──────────────────────────────────────
-        self._list_view = tk.Frame(self, bg=WHITE)
+        outer = tk.Frame(self, bg=BG_CREAM, padx=20, pady=16)
+        outer.pack(fill="both", expand=True)
+        self._box = tk.Frame(outer, bg=BG_WHITE, padx=36, pady=28)
+        self._box.pack(fill="both", expand=True)
+        self._show_list_view()
 
-        lhdr = tk.Frame(self._list_view, bg=WHITE)
-        lhdr.pack(fill="x", padx=30, pady=(24, 0))
-        tk.Label(lhdr, text="Wallets", bg=WHITE, fg=TEXT_DARK,
+    # ══════════════════════════════════════════════════════════════════
+    # LIST VIEW
+    # ══════════════════════════════════════════════════════════════════
+    def _show_list_view(self):
+        self._clear_box()
+        self._view = "list"
+
+        # ── header row ────────────────────────────────────────────────
+        hdr = tk.Frame(self._box, bg=BG_WHITE)
+        hdr.pack(fill="x", pady=(0, 10))
+        tk.Label(hdr, text="Wallets", bg=BG_WHITE, fg=TEXT_DARK,
                  font=("Georgia", 22, "italic")).pack(side="left")
-        styled_btn(lhdr, "↻ Refresh", self.load_folders,
-                   bg=AMBER, font=("Poppins", 9)).pack(side="right")
 
-        sbar = tk.Frame(self._list_view, bg=WHITE)
-        sbar.pack(fill="x", padx=30, pady=8)
+        # academic year dropdown
+        self._year_var = tk.StringVar(value="All years")
+        self._year_menu = ttk.Combobox(hdr, textvariable=self._year_var,
+                                       state="readonly", width=12,
+                                       font=font(9))
+        self._year_menu.pack(side="right", padx=(6, 0))
+
+        # search bar
         self._search_var = tk.StringVar()
-        self._search_var.trace("w", lambda *a: self._render_folders())
-        se = tk.Entry(sbar, textvariable=self._search_var,
-                      font=("Poppins", 10), relief="flat",
-                      highlightbackground=CREAM, highlightthickness=1)
-        se.pack(side="left", ipady=6, padx=(0, 8), ipadx=10)
+        search = tk.Entry(hdr, textvariable=self._search_var,
+                          font=font(9), bd=1, relief="solid",
+                          highlightbackground=_FILTER_BDR,
+                          highlightthickness=1)
+        search.insert(0, "Search wallet...")
+        search.config(fg=TEXT_MUTED)
+        search.pack(side="right", ipady=5, ipadx=8)
 
-        canvas = tk.Canvas(self._list_view, bg=WHITE, highlightthickness=0)
-        sb     = ttk.Scrollbar(self._list_view, orient="vertical", command=canvas.yview)
-        self._grid_inner = tk.Frame(canvas, bg=WHITE)
-        self._grid_inner.bind("<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self._grid_inner, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True, padx=30)
-        sb.pack(side="right", fill="y")
+        def _focus_in(e):
+            if search.get() == "Search wallet...":
+                search.delete(0, "end")
+                search.config(fg=TEXT_DARK)
+        def _focus_out(e):
+            if not search.get():
+                search.insert(0, "Search wallet...")
+                search.config(fg=TEXT_MUTED)
+        search.bind("<FocusIn>",  _focus_in)
+        search.bind("<FocusOut>", _focus_out)
 
-        # ── DETAIL VIEW ────────────────────────────────────
-        self._detail_view = tk.Frame(self, bg=WHITE)
+        # loading
+        loading = tk.Label(self._box, text="Loading wallets...",
+                           bg=BG_WHITE, fg=TEXT_MUTED, font=font(10))
+        loading.pack(pady=30)
+        self.update()
 
-        dhdr = tk.Frame(self._detail_view, bg=WHITE)
-        dhdr.pack(fill="x", padx=30, pady=(20, 0))
-        styled_btn(dhdr, "‹", self._show_list, bg=CREAM, fg=TEXT_DARK,
-                   font=("Poppins", 16)).pack(side="left")
-        self._detail_title = tk.Label(dhdr, text="Wallet", bg=WHITE,
-                                      fg=TEXT_DARK, font=("Georgia", 18, "italic"))
-        self._detail_title.pack(side="left", padx=12)
-        styled_btn(dhdr, "+ Add Transaction",
-                   self._open_add_tx, bg=ACTIVE_NAV,
-                   font=("Poppins", 9)).pack(side="right", padx=6)
-
-        tab_row = tk.Frame(self._detail_view, bg=WHITE,
-                           highlightbackground=CREAM, highlightthickness=1)
-        tab_row.pack(fill="x", padx=30, pady=10)
-        self._detail_tabs  = {}
-        self._detail_panes = {}
-        for key, lbl in [("transactions", "Transactions"),
-                          ("reports",      "Reports"),
-                          ("receipts",     "Receipts"),
-                          ("archives",     "Archive")]:
-            b = tk.Button(tab_row, text=lbl, relief="flat",
-                          font=("Poppins", 10), cursor="hand2",
-                          padx=16, pady=8,
-                          command=lambda k=key: self._switch_detail_tab(k))
-            b.pack(side="left")
-            self._detail_tabs[key] = b
-
-        self._detail_body = tk.Frame(self._detail_view, bg=WHITE)
-        self._detail_body.pack(fill="both", expand=True, padx=30)
-
-        # Transactions pane
-        tp = tk.Frame(self._detail_body, bg=WHITE)
-        self._detail_panes["transactions"] = tp
-        tf = tk.Frame(tp, bg=WHITE)
-        tf.pack(fill="x", pady=6)
-        self._tx_filter_btns = {}
-        for f in ("all", "income", "expense"):
-            b = tk.Button(tf, text=f.capitalize(), relief="flat",
-                          font=("Poppins", 9), cursor="hand2",
-                          padx=18, pady=5,
-                          command=lambda x=f: self._set_tx_filter(x))
-            b.pack(side="left", padx=4)
-            self._tx_filter_btns[f] = b
-        self._set_tx_filter("all")
-        tc = tk.Canvas(tp, bg=WHITE, highlightthickness=0)
-        ts = ttk.Scrollbar(tp, orient="vertical", command=tc.yview)
-        self._tx_list = tk.Frame(tc, bg=WHITE)
-        self._tx_list.bind("<Configure>",
-            lambda e: tc.configure(scrollregion=tc.bbox("all")))
-        tc.create_window((0, 0), window=self._tx_list, anchor="nw")
-        tc.configure(yscrollcommand=ts.set)
-        tc.pack(side="left", fill="both", expand=True)
-        ts.pack(side="right", fill="y")
-
-        # Reports pane
-        rp = tk.Frame(self._detail_body, bg=WHITE)
-        self._detail_panes["reports"] = rp
-        self._build_reports_pane(rp)
-
-        # Receipts pane
-        rcp = tk.Frame(self._detail_body, bg=WHITE)
-        self._detail_panes["receipts"] = rcp
-        tk.Label(rcp,
-                 text="Receipts are stored in Supabase Storage.\nOpen the web app to view receipt images.",
-                 bg=WHITE, fg=TEXT_MUTE, font=("Poppins", 10),
-                 justify="center").pack(pady=60)
-
-        # Archives pane
-        ap = tk.Frame(self._detail_body, bg=WHITE)
-        self._detail_panes["archives"] = ap
-        self._build_archives_pane(ap)
-
-        self._switch_detail_tab("transactions")
-
-    def _build_reports_pane(self, parent):
-        bar = tk.Frame(parent, bg=AMBER_LIGHT)
-        bar.pack(fill="x", pady=10)
-        tk.Label(bar, text="Generate Financial Report", bg=AMBER_LIGHT,
-                 fg=TEXT_DARK, font=("Poppins", 12, "bold"),
-                 padx=16, pady=14).pack(side="left")
-        styled_btn(bar, "Generate Report",
-                   self._generate_report, bg=WHITE, fg=TEXT_DARK,
-                   font=("Poppins", 9)).pack(side="right", padx=8, pady=10)
-
-        stats = tk.Frame(parent, bg=WHITE)
-        stats.pack(fill="x", pady=10)
-        self._stat_vars = {}
-        for key, lbl in [("budget",  "Budget"),
-                          ("income",  "Total Income"),
-                          ("expense", "Total Expenses"),
-                          ("ending",  "Ending Cash")]:
-            c = tk.Frame(stats, bg=WHITE,
-                         highlightbackground=CREAM, highlightthickness=2)
-            c.pack(side="left", fill="both", expand=True, padx=6, pady=4)
-            tk.Label(c, text=lbl, bg=WHITE, fg=TEXT_MUTE,
-                     font=("Poppins", 9), pady=6).pack()
-            var = tk.StringVar(value="Php 0.00")
-            self._stat_vars[key] = var
-            tk.Label(c, textvariable=var, bg=WHITE, fg=TEXT_DARK,
-                     font=("Poppins", 11, "bold"), pady=6).pack()
-
-        styled_btn(parent, "Submit Report to OSAS",
-                   self._submit_report, bg=GREEN_OK,
-                   font=("Poppins", 10, "bold")).pack(pady=12, ipady=4)
-
-    def _build_archives_pane(self, parent):
-        tk.Label(parent, text="Submitted Reports", bg=WHITE, fg=TEXT_DARK,
-                 font=("Poppins", 12, "bold")).pack(anchor="w", pady=(8, 6))
-        styled_btn(parent, "↻ Load Archives",
-                   self._load_archives, bg=AMBER,
-                   font=("Poppins", 9)).pack(anchor="e", pady=4)
-        canvas = tk.Canvas(parent, bg=WHITE, highlightthickness=0)
-        sb     = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        self._arch_list = tk.Frame(canvas, bg=WHITE)
-        self._arch_list.bind("<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self._arch_list, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-
-    def _show_list(self):
-        self._detail_view.pack_forget()
-        self._list_view.pack(fill="both", expand=True)
-
-    def _show_detail(self, folder):
-        self._sel_folder = folder
-        self._list_view.pack_forget()
-        self._detail_title.config(
-            text=f"{folder.get('wallet_name', '')} / {folder.get('name', '')} {folder.get('year', '')}")
-        self._detail_view.pack(fill="both", expand=True)
-        self._switch_detail_tab("transactions")
-        self._load_transactions()
-        self._load_report_stats()
-
-    def _switch_detail_tab(self, key):
-        for k, b in self._detail_tabs.items():
-            if k == key:
-                b.config(bg=WHITE, fg=TEXT_DARK,
-                         highlightbackground=AMBER, highlightthickness=2)
-            else:
-                b.config(bg=WHITE, fg=TEXT_MUTE,
-                         highlightbackground=CREAM, highlightthickness=0)
-        for k, p in self._detail_panes.items():
-            if k == key:
-                p.pack(fill="both", expand=True)
-            else:
-                p.pack_forget()
-
-    def _set_tx_filter(self, f):
-        self._tx_filter = f
-        for k, b in self._tx_filter_btns.items():
-            b.config(bg=AMBER if k == f else WHITE,
-                     fg=WHITE if k == f else TEXT_MUTE)
-        if self._sel_folder:
-            self._load_transactions()
-
-    def load_folders(self):
-        org_id = self.org["id"]
         try:
-            wres = supabase.table("wallets").select("id,name") \
-                           .eq("organization_id", org_id).execute()
-            self._folders = []
-            for w in (wres.data or []):
-                bres = supabase.table("wallet_budgets") \
-                               .select("id,amount,year,month_id,months(month_name,month_order)") \
-                               .eq("wallet_id", w["id"]).execute()
-                for b in (bres.data or []):
-                    self._folders.append({
-                        "id":          b["id"],
-                        "wallet_id":   w["id"],
-                        "wallet_name": w["name"],
-                        "name":        b["months"]["month_name"],
-                        "year":        b["year"],
-                        "amount":      float(b.get("amount") or 0),
-                    })
-            self._render_folders()
-        except Exception as e:
-            messagebox.showerror("Wallets Error", str(e))
+            all_wallets = get_wallets(self._org.get("id"))
+        except Exception:
+            all_wallets = []
+        loading.destroy()
 
-    def _render_folders(self):
-        for w in self._grid_inner.winfo_children():
-            w.destroy()
-        q     = self._search_var.get().lower()
-        shown = [f for f in self._folders
-                 if q in f["wallet_name"].lower() or q in f["name"].lower()]
-        if not shown:
-            tk.Label(self._grid_inner, text="No wallets found.",
-                     bg=WHITE, fg=TEXT_MUTE,
-                     font=("Poppins", 10)).pack(pady=40)
+        if not all_wallets:
+            self._empty(self._box, "No wallets found.",
+                        "No active wallets for this organization.")
             return
 
-        colors    = [AMBER_LIGHT, CREAM, "#E8F5E9", "#E3F2FD", "#FFF3E0"]
-        row_frame = None
-        for i, f in enumerate(shown):
-            if i % 4 == 0:
-                row_frame = tk.Frame(self._grid_inner, bg=WHITE)
-                row_frame.pack(fill="x", pady=8, padx=4)
-            bg_col = colors[i % len(colors)]
-            card = tk.Frame(row_frame, bg=bg_col, width=170, height=130,
-                            cursor="hand2",
-                            highlightbackground="#CCC", highlightthickness=1)
-            card.pack(side="left", padx=8)
-            card.pack_propagate(False)
-            card.bind("<Button-1>", lambda e, folder=f: self._show_detail(folder))
-            tk.Label(card, text=f["name"], bg=bg_col, fg=TEXT_DARK,
-                     font=("Poppins", 10, "bold"), wraplength=140,
-                     justify="center").place(relx=0.5, rely=0.3, anchor="center")
-            tk.Label(card, text=f["wallet_name"], bg=bg_col, fg=TEXT_MUTE,
-                     font=("Poppins", 8)).place(relx=0.5, rely=0.55, anchor="center")
-            tk.Label(card, text=f"{f['year']}", bg=bg_col, fg=TEXT_MUTE,
-                     font=("Poppins", 8)).place(relx=0.5, rely=0.70, anchor="center")
+        # build academic year list
+        acad_years = sorted(set(w["acad_year"] for w in all_wallets), reverse=True)
+        self._year_menu["values"] = ["All years"] + acad_years
+
+        # default to current academic year
+        now = datetime.now()
+        cur_ay = (f"{now.year}-{now.year+1}" if now.month >= 8
+                  else f"{now.year-1}-{now.year}")
+        if cur_ay in acad_years:
+            self._year_var.set(cur_ay)
+        else:
+            self._year_var.set(acad_years[0] if acad_years else "All years")
+
+        # scrollable area
+        canvas = tk.Canvas(self._box, bg=BG_WHITE, bd=0, highlightthickness=0)
+        sb = ttk.Scrollbar(self._box, orient="vertical", command=canvas.yview)
+        self._grid_inner = tk.Frame(canvas, bg=BG_WHITE)
+        self._grid_inner.bind("<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        self._canvas_win = canvas.create_window((0, 0), window=self._grid_inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        # keep inner frame same width as canvas
+        canvas.bind("<Configure>",
+            lambda e: canvas.itemconfig(self._canvas_win, width=e.width))
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self._bind_scroll(canvas)
+
+        self._all_wallets  = all_wallets
+        self._wallet_cards = []
+        wallet_img = _img("wallet.png", 160, 150, self._imgs)
+        self._wallet_img   = wallet_img
+
+        # wire up filters — rebuild grid on change
+        self._search_var.trace_add("write", lambda *_: self._apply_filters())
+        self._year_var.trace_add("write",   lambda *_: self._apply_filters())
+
+        # initial render
+        self._apply_filters()
+
+    def _apply_filters(self):
+        q  = self._search_var.get().lower()
+        if q == "search wallet...":
+            q = ""
+        ay = self._year_var.get()
+
+        # destroy all existing cards and rows
+        for w in self._grid_inner.winfo_children():
+            w.destroy()
+        self._wallet_cards = []
+
+        visible = [
+            w for w in self._all_wallets
+            if (q in w["name"].lower() or q in w["month"].lower())
+            and (ay == "All years" or w["acad_year"] == ay)
+        ]
+
+        if not visible:
+            tk.Label(self._grid_inner, text="No wallets match.",
+                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(9)).pack(pady=20)
+            return
+
+        cols = 4
+        row_f = None
+        for i, w in enumerate(visible):
+            if i % cols == 0:
+                row_f = tk.Frame(self._grid_inner, bg=BG_WHITE)
+                row_f.pack(anchor="w", pady=(0, 8))
+            color = _CARD_COLORS[i % len(_CARD_COLORS)]
+            card = self._wallet_card(row_f, w, color, self._wallet_img)
+            self._wallet_cards.append((card, w))
+
+    def _wallet_card(self, parent, w, color, wallet_img):
+        CARD_W, CARD_H = 160, 150
+
+        outer = tk.Frame(parent, bg=BG_WHITE, cursor="hand2")
+        outer.pack(side="left", padx=(0, 8))
+
+        cv = tk.Canvas(outer, width=CARD_W, height=CARD_H,
+                       bd=0, highlightthickness=2,
+                       highlightbackground="#ddd", bg=color)
+        cv.pack()
+
+        if wallet_img:
+            cv.create_image(0, 0, image=wallet_img, anchor="nw")
+
+        month_name = w.get("month_name", "").upper()
+        pad_x, pad_y = 6, 3
+        text_w = len(month_name) * 7 + pad_x * 2
+        text_h = 16 + pad_y * 2
+        x1, y1 = 8, CARD_H - 10 - text_h
+        x2, y2 = x1 + text_w, CARD_H - 10
+        cv.create_rectangle(x1, y1, x2, y2, fill="white", outline="", width=0)
+        cv.create_text(x1 + pad_x, (y1 + y2) // 2,
+                       text=month_name, anchor="w",
+                       font=font(8, "bold"), fill=TEXT_DARK)
+
+        def _enter(e): cv.config(highlightbackground=_BTN_BROWN, highlightthickness=2)
+        def _leave(e): cv.config(highlightbackground="#ddd", highlightthickness=1)
+        def _click(e, wallet=w): self._show_detail_view(wallet)
+
+        for widget in (outer, cv):
+            widget.bind("<Button-1>", _click)
+            widget.bind("<Enter>",    _enter)
+            widget.bind("<Leave>",    _leave)
+
+        outer._wallet_name = w["name"]
+        return outer
+
+    # ══════════════════════════════════════════════════════════════════
+    # DETAIL VIEW
+    # ══════════════════════════════════════════════════════════════════
+    def _show_detail_view(self, wallet):
+        self._clear_box()
+        self._view      = "detail"
+        self._wallet    = wallet
+        self._tx_filter = "all"
+
+        # ── header ────────────────────────────────────────────────────
+        hdr = tk.Frame(self._box, bg=BG_WHITE)
+        hdr.pack(fill="x", pady=(0, 4))
+
+        # back
+        back = tk.Label(hdr, text="‹", bg=BG_WHITE, fg=_BTN_BROWN,
+                        font=font(22), cursor="hand2")
+        back.pack(side="left")
+        back.bind("<Button-1>", lambda e: self._show_list_view())
+        back.bind("<Enter>",    lambda e: back.config(fg="#5A2D0C"))
+        back.bind("<Leave>",    lambda e: back.config(fg=_BTN_BROWN))
+
+        # title — month name only, italic Georgia
+        month_title = wallet.get("month_name", "").capitalize()
+        tk.Label(hdr, text=month_title, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=("Georgia", 16, "italic")).pack(side="left", padx=(8, 0))
+
+        # —— Add budget secondary button (right side) ——
+        budget_btn = tk.Label(hdr, text="Add budget for this month",
+                              bg=BG_WHITE, fg="#616161",
+                              font=font(8), padx=12, pady=7,
+                              cursor="hand2",
+                              highlightbackground=_FILTER_BDR,
+                              highlightthickness=1)
+        budget_btn.pack(side="right", padx=(6, 0))
+        budget_btn.bind("<Enter>", lambda e: budget_btn.config(bg="#F5F1E8"))
+        budget_btn.bind("<Leave>", lambda e: budget_btn.config(bg=BG_WHITE))
+
+        # —— + Add button with dropdown ——
+        add_wrap = tk.Frame(hdr, bg=BG_WHITE)
+        add_wrap.pack(side="right", padx=(0, 6))
+
+        add_btn = tk.Label(add_wrap, text="+ Add", bg=_BTN_BROWN, fg="white",
+                           font=font(9, "bold"), padx=14, pady=7, cursor="hand2")
+        add_btn.pack()
+        add_btn.bind("<Enter>", lambda e: add_btn.config(bg=_BTN_HOV))
+        add_btn.bind("<Leave>", lambda e: add_btn.config(bg=_BTN_BROWN))
+
+        # dropdown
+        drop = tk.Frame(self._box, bg="white",
+                        highlightbackground="#ddd", highlightthickness=1)
+        drop._open = False
+
+        for txt, kind in [("Add income transaction", "income"),
+                          ("Add expense transaction", "expense")]:
+            item = tk.Label(drop, text=txt, bg="white", fg=TEXT_DARK,
+                            font=font(9), padx=16, pady=8, anchor="w",
+                            cursor="hand2")
+            item.pack(fill="x")
+            item.bind("<Enter>", lambda e, b=item: b.config(bg="#F5F1E8"))
+            item.bind("<Leave>", lambda e, b=item: b.config(bg="white"))
+            item.bind("<Button-1>",
+                      lambda e, k=kind: (self._close_drop(drop),
+                                         self._open_tx_dialog(k)))
+
+        def _toggle(e=None):
+            if drop._open:
+                self._close_drop(drop)
+            else:
+                drop.place(in_=self._box, relx=1.0, rely=0,
+                           anchor="ne", x=-36, y=60)
+                drop.lift()
+                drop._open = True
+
+        add_btn.bind("<Button-1>", _toggle)
+
+        # ── tab nav ───────────────────────────────────────────────────
+        tab_bar = tk.Frame(self._box, bg=BG_WHITE,
+                           highlightbackground=_FILTER_BDR,
+                           highlightthickness=0)
+        tab_bar.pack(fill="x", pady=(12, 0))
+
+        # bottom border line
+        tk.Frame(self._box, bg=_FILTER_BDR, height=2).pack(fill="x")
+
+        self._tab_btns = {}
+        self._tab_content = tk.Frame(self._box, bg=BG_WHITE)
+        self._tab_content.pack(fill="both", expand=True, pady=(12, 0))
+
+        for key, label in [("transactions","Transactions"),("reports","Reports"),
+                            ("receipts","Receipts"),("archives","Archive")]:
+            btn = tk.Label(tab_bar, text=label, bg=BG_WHITE, fg="#616161",
+                           font=font(10, "bold"), padx=20, pady=10,
+                           cursor="hand2")
+            btn.pack(side="left")
+            btn.bind("<Button-1>", lambda e, k=key: self._switch_tab(k))
+            btn.bind("<Enter>",    lambda e, b=btn, k=key: b.config(fg=TEXT_DARK) if k != self._active_tab else None)
+            btn.bind("<Leave>",    lambda e, b=btn, k=key: b.config(fg="#616161") if k != self._active_tab else None)
+            self._tab_btns[key] = btn
+
+        self._active_tab = "transactions"
+        self._switch_tab("transactions")
+
+    def _close_drop(self, drop):
+        drop.place_forget()
+        drop._open = False
+
+    def _open_tx_dialog(self, kind):
+        """Placeholder — shows a simple info label for now."""
+        import tkinter.messagebox as mb
+        mb.showinfo("Add Transaction",
+                    f"Add {kind} transaction for {self._wallet.get('month_name','')}")
+
+    def _switch_tab(self, key):
+        self._active_tab = key
+        for k, btn in self._tab_btns.items():
+            if k == key:
+                btn.config(fg=TEXT_DARK, font=font(10, "bold"))
+                # underline effect via a small frame below
+            else:
+                btn.config(fg="#616161", font=font(10))
+
+        for w in self._tab_content.winfo_children():
+            w.destroy()
+
+        if key == "transactions":
+            self._tab_transactions()
+        elif key == "reports":
+            self._tab_reports()
+        elif key == "receipts":
+            self._tab_receipts()
+        elif key == "archives":
+            self._tab_archives()
+
+    # ── TRANSACTIONS TAB ──────────────────────────────────────────────
+    def _tab_transactions(self):
+        p = self._tab_content
+
+        # filter tabs
+        flt_row = tk.Frame(p, bg=BG_WHITE)
+        flt_row.pack(pady=(0, 12))
+        self._flt_btns = {}
+        for key, lbl in [("all","All"),("income","Income"),("expense","Expense")]:
+            b = tk.Label(flt_row, text=lbl, bg=BG_WHITE, fg=TEXT_DARK,
+                         font=font(9), padx=22, pady=7, cursor="hand2",
+                         highlightbackground=_FILTER_BDR, highlightthickness=2)
+            b.pack(side="left", padx=5)
+            b.bind("<Button-1>", lambda e, k=key: self._set_tx_filter(k))
+            self._flt_btns[key] = b
+        self._set_tx_filter(self._tx_filter, refresh=False)
+        self._update_flt_styles()
+
+        # list area
+        self._tx_list = tk.Frame(p, bg=BG_WHITE)
+        self._tx_list.pack(fill="both", expand=True)
+        self._load_transactions()
+
+    def _set_tx_filter(self, key, refresh=True):
+        self._tx_filter = key
+        self._update_flt_styles()
+        if refresh:
+            self._load_transactions()
+
+    def _update_flt_styles(self):
+        for k, b in self._flt_btns.items():
+            if k == self._tx_filter:
+                b.config(bg=_FILTER_ACT, fg="white", highlightbackground=_FILTER_ACT)
+            else:
+                b.config(bg=BG_WHITE, fg=TEXT_DARK, highlightbackground=_FILTER_BDR)
 
     def _load_transactions(self):
         for w in self._tx_list.winfo_children():
             w.destroy()
-        if not self._sel_folder:
-            return
-        fid = self._sel_folder["id"]
-        wid = self._sel_folder["wallet_id"]
-        try:
-            res = supabase.table("wallet_transactions") \
-                          .select("id,kind,date_issued,description,quantity,price,income_type,particulars") \
-                          .eq("wallet_id", wid) \
-                          .eq("budget_id", fid) \
-                          .order("date_issued").execute()
-            txs = res.data or []
-            if self._tx_filter != "all":
-                txs = [t for t in txs if t.get("kind") == self._tx_filter]
-            if not txs:
-                tk.Label(self._tx_list, text="No transactions.",
-                         bg=WHITE, fg=TEXT_MUTE,
-                         font=("Poppins", 10)).pack(pady=30)
-                return
-            for tx in txs:
-                qty   = int(tx.get("quantity") or 0)
-                price = float(tx.get("price") or 0)
-                amt   = qty * price
-                kind  = tx.get("kind", "")
-                color = GREEN_OK if kind == "income" else RED_ERR
-                sign  = "+" if kind == "income" else "-"
 
-                row = tk.Frame(self._tx_list, bg=WHITE,
-                               highlightbackground=CREAM, highlightthickness=1)
-                row.pack(fill="x", pady=3, padx=2)
-                left = tk.Frame(row, bg=WHITE)
-                left.pack(side="left", padx=10, pady=6, fill="both", expand=True)
-                desc = tx.get("description") or tx.get("particulars", "")
-                tk.Label(left, text=desc[:44], bg=WHITE, fg=TEXT_DARK,
-                         font=("Poppins", 9, "bold"), anchor="w").pack(anchor="w")
-                sub = tx.get("income_type", "") or kind.capitalize()
-                tk.Label(left, text=f"{sub}  ·  {tx.get('date_issued', '')[:10]}",
-                         bg=WHITE, fg=TEXT_MUTE,
-                         font=("Poppins", 8)).pack(anchor="w")
-                tk.Label(row, text=f"{sign}Php {amt:,.2f}",
-                         bg=WHITE, fg=color,
-                         font=("Poppins", 10, "bold"), padx=10).pack(side="right")
-        except Exception as e:
-            messagebox.showerror("Transactions Error", str(e))
+        loading = tk.Label(self._tx_list, text="Loading...",
+                           bg=BG_WHITE, fg=TEXT_MUTED, font=font(9))
+        loading.pack(pady=10)
+        self.update()
 
-    def _load_report_stats(self):
-        if not self._sel_folder:
-            return
-        fid = self._sel_folder["id"]
-        wid = self._sel_folder["wallet_id"]
         try:
-            res = supabase.table("wallet_transactions") \
-                          .select("kind,quantity,price") \
-                          .eq("wallet_id", wid) \
-                          .eq("budget_id", fid).execute()
-            total_inc = total_exp = 0.0
-            for tx in (res.data or []):
-                qty   = int(tx.get("quantity") or 0)
-                price = float(tx.get("price") or 0)
-                amt   = qty * price
-                if tx.get("kind") == "income":
-                    total_inc += amt
-                else:
-                    total_exp += amt
-            budget = self._sel_folder.get("amount", 0)
-            ending = budget + total_inc - total_exp
-            self._stat_vars["budget"].set(f"Php {budget:,.2f}")
-            self._stat_vars["income"].set(f"Php {total_inc:,.2f}")
-            self._stat_vars["expense"].set(f"Php {total_exp:,.2f}")
-            self._stat_vars["ending"].set(f"Php {ending:,.2f}")
+            rows = get_wallet_transactions(self._wallet["id"], self._tx_filter,
+                                           year=self._wallet.get("year"),
+                                           month=self._wallet.get("month_id"))
         except Exception:
-            pass
+            rows = []
+        loading.destroy()
 
-    def _load_archives(self):
-        for w in self._arch_list.winfo_children():
+        canvas = tk.Canvas(self._tx_list, bg=BG_WHITE, bd=0, highlightthickness=0)
+        sb = ttk.Scrollbar(self._tx_list, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=BG_WHITE)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self._bind_scroll(canvas)
+
+        if not rows:
+            self._empty(inner, "No transactions found.", "Try a different filter.")
+            return
+
+        for t in rows:
+            self._tx_item(inner, t)
+
+    def _tx_item(self, parent, t):
+        date  = t.get("date_issued", "")[:10]
+        desc  = t.get("description") or t.get("particulars") or "—"
+        cat   = t.get("income_type") or t.get("particulars") or t["kind"].capitalize()
+        amt   = t["price"] * t["quantity"]
+        if t["kind"] == "expense":
+            amt = -amt
+
+        card = tk.Frame(parent, bg=BG_WHITE,
+                        highlightbackground=_FILTER_BDR,
+                        highlightthickness=1, padx=14, pady=10)
+        card.pack(fill="x", pady=4, padx=2)
+        card.bind("<Enter>", lambda e: card.config(highlightbackground=_ACTIVE_TAB))
+        card.bind("<Leave>", lambda e: card.config(highlightbackground=_FILTER_BDR))
+
+        left = tk.Frame(card, bg=BG_WHITE)
+        left.pack(side="left", fill="x", expand=True)
+        tk.Label(left, text=desc, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(9, "bold"), anchor="w").pack(anchor="w")
+        tk.Label(left, text=cat,  bg=BG_WHITE, fg=TEXT_MUTED,
+                 font=font(8), anchor="w").pack(anchor="w")
+        tk.Label(left, text=date, bg=BG_WHITE, fg="#999999",
+                 font=font(7), anchor="w").pack(anchor="w")
+
+        color = _INCOME_CLR if amt >= 0 else _EXPENSE_CLR
+        sign  = "+" if amt >= 0 else "-"
+        tk.Label(card, text=f"{sign}₱{abs(amt):,.2f}",
+                 bg=BG_WHITE, fg=color,
+                 font=font(10, "bold")).pack(side="right", anchor="center")
+
+    # ── REPORTS TAB ───────────────────────────────────────────────────
+    def _tab_reports(self):
+        p = self._tab_content
+
+        try:
+            budget  = get_wallet_budget(self._wallet["id"],
+                                        self._wallet.get("year"),
+                                        self._wallet.get("month_id"))
+            txs     = get_wallet_transactions(self._wallet["id"],
+                                              year=self._wallet.get("year"),
+                                              month=self._wallet.get("month_id"))
+            income  = sum(t["price"]*t["quantity"] for t in txs if t["kind"]=="income")
+            expense = sum(t["price"]*t["quantity"] for t in txs if t["kind"]=="expense")
+            ending  = income - expense
+        except Exception:
+            budget = income = expense = ending = 0.0
+
+        # amber gradient report header
+        banner = tk.Frame(p, bg="#E59E2C", padx=20, pady=18)
+        banner.pack(fill="x", pady=(0, 16))
+
+        reports_img = _img("reports.png", 44, 44, self._imgs)
+        if reports_img:
+            tk.Label(banner, image=reports_img, bg="#E59E2C").pack(side="left", padx=(0, 14))
+
+        info = tk.Frame(banner, bg="#E59E2C")
+        info.pack(side="left", fill="x", expand=True)
+        tk.Label(info, text="Generate Financial Report", bg="#E59E2C",
+                 fg=TEXT_DARK, font=font(11, "bold")).pack(anchor="w")
+        tk.Label(info, text="Create an Activity Financial Statement for this wallet.",
+                 bg="#E59E2C", fg="#616161", font=font(8)).pack(anchor="w")
+
+        gen_btn = tk.Label(banner, text="Generate report", bg=BG_WHITE,
+                           fg=TEXT_DARK, font=font(9, "bold"),
+                           padx=14, pady=8, cursor="hand2")
+        gen_btn.pack(side="right")
+        gen_btn.bind("<Enter>", lambda e: gen_btn.config(bg=_FILTER_BDR))
+        gen_btn.bind("<Leave>", lambda e: gen_btn.config(bg=BG_WHITE))
+
+        # stat cards
+        stats_row = tk.Frame(p, bg=BG_WHITE)
+        stats_row.pack(fill="x")
+        for i, (lbl, val) in enumerate([
+            ("Budget",                  f"₱{budget:,.2f}"),
+            ("Total amount of income",  f"₱{income:,.2f}"),
+            ("Total amount of expenses",f"₱{expense:,.2f}"),
+            ("Ending Cash",             f"₱{ending:,.2f}"),
+        ]):
+            stats_row.columnconfigure(i, weight=1)
+            card = tk.Frame(stats_row, bg=BG_WHITE,
+                            highlightbackground=_FILTER_BDR,
+                            highlightthickness=2, padx=14, pady=14)
+            card.grid(row=0, column=i, padx=6, sticky="nsew")
+            tk.Label(card, text=lbl, bg=BG_WHITE, fg="#616161",
+                     font=font(7), wraplength=130, justify="center").pack()
+            tk.Label(card, text=val, bg=BG_WHITE, fg=TEXT_DARK,
+                     font=font(10, "bold")).pack(pady=(6, 0))
+
+    # ── RECEIPTS TAB ──────────────────────────────────────────────────
+    def _tab_receipts(self):
+        p = self._tab_content
+        loading = tk.Label(p, text="Loading receipts...",
+                           bg=BG_WHITE, fg=TEXT_MUTED, font=font(9))
+        loading.pack(pady=10)
+        self.update()
+
+        try:
+            receipts = get_wallet_receipts(self._wallet["id"])
+        except Exception:
+            receipts = []
+        loading.destroy()
+
+        if not receipts:
+            self._empty(p, "No receipts found.", "No receipts uploaded for this wallet.")
+            return
+
+        canvas = tk.Canvas(p, bg=BG_WHITE, bd=0, highlightthickness=0)
+        sb = ttk.Scrollbar(p, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=BG_WHITE)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self._bind_scroll(canvas)
+
+        receipts_ico = _img("receipts.png", 36, 36, self._imgs)
+        cols = 4
+        for i, r in enumerate(receipts):
+            col_i = i % cols
+            row_i = i // cols
+            inner.columnconfigure(col_i, weight=1)
+            self._receipt_card(inner, row_i, col_i, r, receipts_ico)
+
+    def _receipt_card(self, parent, row, col, r, icon):
+        card = tk.Frame(parent, bg=BG_WHITE,
+                        highlightbackground=_FILTER_BDR,
+                        highlightthickness=2, padx=14, pady=14)
+        card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+
+        ico_frm = tk.Frame(card, bg="#F5F5F5", width=60, height=60)
+        ico_frm.pack(pady=(0, 8))
+        ico_frm.pack_propagate(False)
+        if icon:
+            tk.Label(ico_frm, image=icon, bg="#F5F5F5").place(relx=0.5, rely=0.5, anchor="center")
+
+        desc = r.get("description") or "Receipt"
+        date = r.get("receipt_date", "")[:10]
+        tk.Label(card, text=desc, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(8, "bold"), wraplength=130).pack()
+        tk.Label(card, text=date, bg=BG_WHITE, fg=TEXT_MUTED,
+                 font=font(7)).pack(pady=(2, 8))
+
+        view_btn = tk.Label(card, text="View", bg=_FILTER_BDR,
+                            fg=TEXT_DARK, font=font(8, "bold"),
+                            padx=10, pady=4, cursor="hand2")
+        view_btn.pack()
+        view_btn.bind("<Enter>", lambda e: view_btn.config(bg="#D4C4A8"))
+        view_btn.bind("<Leave>", lambda e: view_btn.config(bg=_FILTER_BDR))
+
+    # ── ARCHIVES TAB ──────────────────────────────────────────────────
+    def _tab_archives(self):
+        p = self._tab_content
+        loading = tk.Label(p, text="Loading reports...",
+                           bg=BG_WHITE, fg=TEXT_MUTED, font=font(9))
+        loading.pack(pady=10)
+        self.update()
+
+        try:
+            reports = get_wallet_reports(self._org.get("id"), self._wallet["id"])
+        except Exception:
+            reports = []
+        loading.destroy()
+
+        if not reports:
+            self._empty(p, "No archived reports.", "No financial reports submitted yet.")
+            return
+
+        canvas = tk.Canvas(p, bg=BG_WHITE, bd=0, highlightthickness=0)
+        sb = ttk.Scrollbar(p, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=BG_WHITE)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self._bind_scroll(canvas)
+
+        cols = 3
+        for i, rep in enumerate(reports):
+            col_i = i % cols
+            row_i = i // cols
+            inner.columnconfigure(col_i, weight=1)
+            self._archive_card(inner, row_i, col_i, rep)
+
+    def _archive_card(self, parent, row, col, rep):
+        card = tk.Frame(parent, bg=BG_WHITE,
+                        highlightbackground=_FILTER_BDR,
+                        highlightthickness=2, padx=16, pady=14)
+        card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+
+        rep_no = rep.get("report_no") or f"FR-{rep['id']:03d}"
+        tk.Label(card, text=rep_no, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(10, "bold")).pack()
+
+        event = rep.get("event_name") or "—"
+        date  = (rep.get("submission_date") or "")[:10]
+        status = rep.get("status") or "—"
+        income  = rep.get("total_income")  or 0
+        expense = rep.get("total_expense") or 0
+        ending  = (income or 0) - (expense or 0)
+
+        for lbl, val in [("Event", event), ("Date", date), ("Status", status),
+                         ("Income", f"₱{income:,.2f}"),
+                         ("Expense", f"₱{expense:,.2f}"),
+                         ("Ending Cash", f"₱{ending:,.2f}")]:
+            row_f = tk.Frame(card, bg=BG_WHITE)
+            row_f.pack(fill="x", pady=1)
+            tk.Label(row_f, text=lbl+":", bg=BG_WHITE, fg=TEXT_MUTED,
+                     font=font(7), anchor="w", width=10).pack(side="left")
+            tk.Label(row_f, text=str(val), bg=BG_WHITE, fg=TEXT_DARK,
+                     font=font(7, "bold"), anchor="w").pack(side="left")
+
+        dl_btn = tk.Label(card, text="Download", bg=_BTN_BROWN,
+                          fg="white", font=font(8, "bold"),
+                          padx=10, pady=4, cursor="hand2")
+        dl_btn.pack(pady=(8, 0))
+        dl_btn.bind("<Enter>", lambda e: dl_btn.config(bg=_BTN_HOV))
+        dl_btn.bind("<Leave>", lambda e: dl_btn.config(bg=_BTN_BROWN))
+
+    # ── helpers ───────────────────────────────────────────────────────
+    def _clear_box(self):
+        for w in self._box.winfo_children():
             w.destroy()
-        if not self._sel_folder:
-            return
-        fid = self._sel_folder["id"]
-        wid = self._sel_folder["wallet_id"]
-        org = self.org["id"]
-        try:
-            res = supabase.table("financial_report_archives") \
-                          .select("id,report_no,event_name,date_prepared,budget,total_expense,remaining") \
-                          .eq("organization_id", org) \
-                          .eq("wallet_id", wid) \
-                          .eq("budget_id", fid) \
-                          .order("created_at").execute()
-            archives = res.data or []
-            if not archives:
-                tk.Label(self._arch_list, text="No submitted reports.",
-                         bg=WHITE, fg=TEXT_MUTE,
-                         font=("Poppins", 10)).pack(pady=30)
-                return
-            for a in archives:
-                card = tk.Frame(self._arch_list, bg=WHITE,
-                                highlightbackground=CREAM, highlightthickness=2)
-                card.pack(fill="x", pady=6, padx=2)
-                tk.Label(card, text=a.get("report_no", "—"), bg=WHITE,
-                         fg=TEXT_DARK, font=("Poppins", 11, "bold"),
-                         padx=12, pady=6).pack(anchor="w")
-                tk.Label(card, text=f"Event: {a.get('event_name', '—')}",
-                         bg=WHITE, fg=TEXT_MUTE,
-                         font=("Poppins", 9), padx=12).pack(anchor="w")
-                tk.Label(card,
-                         text=f"Budget: Php {float(a.get('budget') or 0):,.2f}  |  "
-                              f"Expense: Php {float(a.get('total_expense') or 0):,.2f}  |  "
-                              f"Remaining: Php {float(a.get('remaining') or 0):,.2f}",
-                         bg=WHITE, fg=TEXT_DARK,
-                         font=("Poppins", 9), padx=12, pady=6).pack(anchor="w")
-        except Exception as e:
-            messagebox.showerror("Archives Error", str(e))
 
-    def _open_add_tx(self):
-        if not self._sel_folder:
-            messagebox.showwarning("No folder", "Select a wallet folder first.")
-            return
-        AddTransactionDialog(self, self._sel_folder, self.org,
-                             on_done=self._load_transactions)
+    def _empty(self, parent, title, subtitle):
+        frm = tk.Frame(parent, bg=BG_WHITE)
+        frm.pack(expand=True, pady=40)
+        tk.Label(frm, text=title, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(11, "bold")).pack()
+        tk.Label(frm, text=subtitle, bg=BG_WHITE, fg=TEXT_MUTED,
+                 font=font(9)).pack(pady=(4, 0))
 
-    def _generate_report(self):
-        if not self._sel_folder:
-            messagebox.showwarning("No folder", "Select a wallet folder first.")
-            return
-        messagebox.showinfo("Generate Report",
-            "Report generation requires the web app (DOCX template).\n"
-            "Please use the web version to generate and download the DOCX report.")
-
-    def _submit_report(self):
-        if not self._sel_folder:
-            messagebox.showwarning("No folder", "Select a wallet folder first.")
-            return
-        if not messagebox.askyesno("Submit Report",
-                "Submit this report to OSAS?\nYou will not be able to edit after submission."):
-            return
-        wid = self._sel_folder["wallet_id"]
-        org = self.org["id"]
-        try:
-            res = supabase.table("financial_reports") \
-                          .select("*") \
-                          .eq("organization_id", org) \
-                          .eq("wallet_id", wid) \
-                          .eq("status", "Pending Review") \
-                          .order("created_at", desc=True).limit(1).execute()
-            if not res.data:
-                messagebox.showinfo("No Report", "No pending report found. Generate one first.")
-                return
-            rep_id = res.data[0]["id"]
-            supabase.table("financial_reports").update({
-                "status":          "Submitted",
-                "submission_date": datetime.utcnow().date().isoformat(),
-                "updated_at":      datetime.utcnow().isoformat(),
-            }).eq("id", rep_id).execute()
-            messagebox.showinfo("Submitted ✓", "Report submitted to OSAS successfully!")
-        except Exception as e:
-            messagebox.showerror("Submit Error", str(e))
-
-
-# ═══════════════════════════════════════════════════════════
-# ADD TRANSACTION DIALOG
-# ═══════════════════════════════════════════════════════════
-class AddTransactionDialog(tk.Toplevel):
-    def __init__(self, parent, folder, org, on_done):
-        super().__init__(parent)
-        self.folder  = folder
-        self.org     = org
-        self.on_done = on_done
-        self.title("Add Transaction")
-        self.geometry("440x520")
-        self.configure(bg=WHITE)
-        self.grab_set()
-        self._build()
-
-    def _build(self):
-        tk.Label(self, text="Add Transaction", bg=WHITE, fg=TEXT_DARK,
-                 font=("Poppins", 14, "bold")).pack(pady=(20, 4))
-        tk.Label(self, text="Add a new transaction for this wallet.",
-                 bg=WHITE, fg=TEXT_MUTE, font=("Poppins", 9)).pack(pady=(0, 14))
-
-        form = tk.Frame(self, bg=WHITE)
-        form.pack(padx=30, fill="x")
-
-        def row(label):
-            tk.Label(form, text=label, bg=WHITE, fg=TEXT_MUTE,
-                     font=("Poppins", 9)).pack(anchor="w", pady=(6, 2))
-
-        row("Kind")
-        self.kind_var = tk.StringVar(value="expense")
-        kind_frame = tk.Frame(form, bg=WHITE)
-        kind_frame.pack(fill="x")
-        for k in ("income", "expense"):
-            tk.Radiobutton(kind_frame, text=k.capitalize(), variable=self.kind_var,
-                           value=k, bg=WHITE, font=("Poppins", 10)).pack(side="left", padx=8)
-
-        row("Date Issued")
-        self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
-        tk.Entry(form, textvariable=self.date_var, font=("Poppins", 10),
-                 relief="flat", highlightbackground=CREAM,
-                 highlightthickness=1).pack(fill="x", ipady=6)
-
-        row("Quantity")
-        self.qty_var = tk.StringVar(value="1")
-        tk.Entry(form, textvariable=self.qty_var, font=("Poppins", 10),
-                 relief="flat", highlightbackground=CREAM,
-                 highlightthickness=1).pack(fill="x", ipady=6)
-
-        row("Description")
-        self.desc_var = tk.StringVar()
-        tk.Entry(form, textvariable=self.desc_var, font=("Poppins", 10),
-                 relief="flat", highlightbackground=CREAM,
-                 highlightthickness=1).pack(fill="x", ipady=6)
-
-        row("Particulars (expense only)")
-        self.part_var = tk.StringVar()
-        tk.Entry(form, textvariable=self.part_var, font=("Poppins", 10),
-                 relief="flat", highlightbackground=CREAM,
-                 highlightthickness=1).pack(fill="x", ipady=6)
-
-        row("Income Type (income only)")
-        self.itype_var = tk.StringVar()
-        ttk.Combobox(form, textvariable=self.itype_var,
-                     values=["IGP", "Registration Fee", "Membership Fee"],
-                     state="readonly", font=("Poppins", 10)).pack(fill="x", ipady=4)
-
-        row("Price")
-        self.price_var = tk.StringVar(value="0.00")
-        tk.Entry(form, textvariable=self.price_var, font=("Poppins", 10),
-                 relief="flat", highlightbackground=CREAM,
-                 highlightthickness=1).pack(fill="x", ipady=6)
-
-        btn_row = tk.Frame(self, bg=WHITE)
-        btn_row.pack(pady=16)
-        styled_btn(btn_row, "Cancel", self.destroy,
-                   bg=CREAM, fg=TEXT_DARK).pack(side="left", padx=8)
-        styled_btn(btn_row, "Save", self._save,
-                   bg=ACTIVE_NAV).pack(side="left", padx=8)
-
-    def _save(self):
-        try:
-            fid   = self.folder["id"]
-            wid   = self.folder["wallet_id"]
-            kind  = self.kind_var.get()
-            date  = self.date_var.get().strip()
-            qty   = int(self.qty_var.get() or 1)
-            desc  = self.desc_var.get().strip()
-            price = float(self.price_var.get() or 0)
-            itype = self.itype_var.get()
-            part  = self.part_var.get().strip()
-
-            if not desc:
-                messagebox.showwarning("Required", "Description is required.")
-                return
+    def _bind_scroll(self, canvas):
+        def _scroll(e):
             try:
-                datetime.strptime(date, "%Y-%m-%d")
-            except ValueError:
-                messagebox.showwarning("Invalid Date", "Date must be in YYYY-MM-DD format.")
-                return
-
-            supabase.table("wallet_transactions").insert({
-                "wallet_id":   wid,
-                "budget_id":   fid,
-                "kind":        kind,
-                "date_issued": date,
-                "quantity":    qty,
-                "description": desc,
-                "price":       price,
-                "income_type": itype if kind == "income" else None,
-                "particulars": part  if kind == "expense" else None,
-            }).execute()
-            messagebox.showinfo("Saved ✓", "Transaction added successfully!")
-            self.destroy()
-            self.on_done()
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+                canvas.yview_scroll(int(-1*(e.delta/120)), "units")
+            except Exception:
+                pass
+        canvas.bind_all("<MouseWheel>", _scroll)
+        canvas.bind("<Destroy>",
+                    lambda e: canvas.unbind_all("<MouseWheel>")
+                    if e.widget is canvas else None)

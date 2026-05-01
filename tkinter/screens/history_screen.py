@@ -1,168 +1,198 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from constants import *
 from datetime import datetime
+from db import get_history_data
 
-from constants import (
-    WHITE, CREAM, AMBER, AMBER_LIGHT,
-    TEXT_DARK, TEXT_MUTE, GREEN_OK, RED_ERR,
-    styled_btn, supabase
-)
+_MONTH_BG      = "#F3D58D"
+_MONTH_NAV_BG  = "#ECDDC6"
+_MONTH_NAV_HOV = "#E59E2C"
+_FILTER_BORDER = "#ECDDC6"
+_FILTER_ACTIVE = "#E59E2C"
+_FILTER_HOV    = "#ECDDC6"
+_INCOME_CLR    = "#2E7D32"
+_EXPENSE_CLR   = "#C62828"
+
+MONTHS = ["January","February","March","April","May","June",
+          "July","August","September","October","November","December"]
 
 
-class HistoryTab(tk.Frame):
-    def __init__(self, parent, org):
-        super().__init__(parent, bg=WHITE)
-        self.org     = org
+class HistoryScreen(tk.Frame):
+    def __init__(self, parent, org=None, **kwargs):
+        super().__init__(parent, bg=BG_CREAM, **kwargs)
+        self._org   = org or {}
+        now         = datetime.now()
+        self._year  = now.year
+        self._month = now.month
         self._filter = "all"
-        self._year   = datetime.now().year
-        self._month  = datetime.now().month
         self._build()
-        self.load()
 
     def _build(self):
-        hdr = tk.Frame(self, bg=WHITE)
-        hdr.pack(fill="x", padx=30, pady=(24, 0))
-        tk.Label(hdr, text="Transaction History", bg=WHITE, fg=TEXT_DARK,
-                 font=("Georgia", 22, "italic")).pack(anchor="w")
+        outer = tk.Frame(self, bg=BG_CREAM, padx=20, pady=16)
+        outer.pack(fill="both", expand=True)
+        self._box = tk.Frame(outer, bg=BG_WHITE, padx=36, pady=28)
+        self._box.pack(fill="both", expand=True)
 
-        # Month navigator
-        nav_row = tk.Frame(self, bg=WHITE)
-        nav_row.pack(pady=10)
-        styled_btn(nav_row, "‹", self._prev_month, bg=CREAM, fg=TEXT_DARK,
-                   font=("Poppins", 14)).pack(side="left", padx=6)
-        self._month_lbl = tk.Label(nav_row, bg=AMBER_LIGHT, fg=TEXT_DARK,
-                                   font=("Poppins", 11, "bold"),
-                                   width=20, pady=8, relief="flat")
+        # title
+        tk.Label(self._box, text="Transaction History", bg=BG_WHITE,
+                 fg=TEXT_DARK, font=("Georgia", 22, "italic")).pack(anchor="w", pady=(0, 6))
+
+        # month selector
+        nav_row = tk.Frame(self._box, bg=BG_WHITE)
+        nav_row.pack(pady=(10, 0))
+
+        prev = tk.Label(nav_row, text="‹", bg=_MONTH_NAV_BG, fg=TEXT_DARK,
+                        font=font(18), width=3, cursor="hand2")
+        prev.pack(side="left", padx=(0, 8))
+        prev.bind("<Button-1>", lambda e: self._change_month(-1))
+        prev.bind("<Enter>",    lambda e: prev.config(bg=_MONTH_NAV_HOV, fg="white"))
+        prev.bind("<Leave>",    lambda e: prev.config(bg=_MONTH_NAV_BG,  fg=TEXT_DARK))
+
+        self._month_lbl = tk.Label(nav_row, text=self._month_str(),
+                                   bg=_MONTH_BG, fg=TEXT_DARK,
+                                   font=font(11, "bold"), padx=28, pady=8)
         self._month_lbl.pack(side="left")
-        styled_btn(nav_row, "›", self._next_month, bg=CREAM, fg=TEXT_DARK,
-                   font=("Poppins", 14)).pack(side="left", padx=6)
-        self._update_month_label()
 
-        # Filter tabs
-        ftab = tk.Frame(self, bg=WHITE)
-        ftab.pack(pady=6)
+        nxt = tk.Label(nav_row, text="›", bg=_MONTH_NAV_BG, fg=TEXT_DARK,
+                       font=font(18), width=3, cursor="hand2")
+        nxt.pack(side="left", padx=(8, 0))
+        nxt.bind("<Button-1>", lambda e: self._change_month(+1))
+        nxt.bind("<Enter>",    lambda e: nxt.config(bg=_MONTH_NAV_HOV, fg="white"))
+        nxt.bind("<Leave>",    lambda e: nxt.config(bg=_MONTH_NAV_BG,  fg=TEXT_DARK))
+
+        # filter tabs
+        flt_row = tk.Frame(self._box, bg=BG_WHITE)
+        flt_row.pack(pady=(18, 0))
         self._filter_btns = {}
-        for f in ("all", "income", "expense"):
-            b = tk.Button(ftab, text=f.capitalize(),
-                          font=("Poppins", 10), relief="flat",
-                          cursor="hand2", padx=20, pady=6,
-                          command=lambda x=f: self._set_filter(x))
-            b.pack(side="left", padx=4)
-            self._filter_btns[f] = b
-        self._set_filter_style("all")
+        for key, label in [("all","All"), ("income","Income"), ("expense","Expense")]:
+            btn = tk.Label(flt_row, text=label, bg=BG_WHITE, fg=TEXT_DARK,
+                           font=font(10), padx=24, pady=8, cursor="hand2",
+                           highlightbackground=_FILTER_BORDER, highlightthickness=2)
+            btn.pack(side="left", padx=6)
+            btn.bind("<Button-1>", lambda e, k=key: self._set_filter(k))
+            btn.bind("<Enter>",    lambda e, b=btn, k=key: b.config(bg=_FILTER_HOV) if k != self._filter else None)
+            btn.bind("<Leave>",    lambda e, b=btn, k=key: b.config(bg=_FILTER_ACTIVE if k == self._filter else BG_WHITE))
+            self._filter_btns[key] = btn
+        self._update_filter_styles()
 
-        # Scrollable list
-        frame = tk.Frame(self, bg=WHITE)
-        frame.pack(fill="both", expand=True, padx=30, pady=4)
-        canvas = tk.Canvas(frame, bg=WHITE, highlightthickness=0)
-        sb     = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
-        self._tx_inner = tk.Frame(canvas, bg=WHITE)
-        self._tx_inner.bind("<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self._tx_inner, anchor="nw")
+        # list area
+        self._list_outer = tk.Frame(self._box, bg=BG_WHITE)
+        self._list_outer.pack(fill="both", expand=True, pady=(10, 0))
+        self._refresh()
+
+    def _refresh(self):
+        for w in self._list_outer.winfo_children():
+            w.destroy()
+
+        loading = tk.Label(self._list_outer, text="Loading...",
+                           bg=BG_WHITE, fg=TEXT_MUTED, font=font(10))
+        loading.pack(pady=20)
+        self.update()
+
+        try:
+            rows = get_history_data(self._org.get("id"), self._year, self._month)
+        except Exception:
+            rows = []
+
+        loading.destroy()
+
+        if self._filter != "all":
+            rows = [r for r in rows if r["kind"] == self._filter]
+
+        canvas = tk.Canvas(self._list_outer, bg=BG_WHITE, bd=0, highlightthickness=0)
+        sb = ttk.Scrollbar(self._list_outer, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=BG_WHITE)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-    def _update_month_label(self):
-        months = ["", "January", "February", "March", "April", "May", "June",
-                  "July", "August", "September", "October", "November", "December"]
-        self._month_lbl.config(text=f"{months[self._month]} {self._year}")
+        def _scroll(e):
+            try:
+                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+            except Exception:
+                pass
+        canvas.bind_all("<MouseWheel>", _scroll)
+        canvas.bind("<Destroy>",
+                    lambda e: canvas.unbind_all("<MouseWheel>") if e.widget is canvas else None)
 
-    def _prev_month(self):
-        self._month -= 1
-        if self._month < 1:
-            self._month = 12
-            self._year -= 1
-        self._update_month_label()
-        self.load()
+        if not rows:
+            tk.Label(inner, text="No transactions found.",
+                     bg=BG_WHITE, fg=TEXT_DARK, font=font(12, "bold")).pack(pady=20)
+            tk.Label(inner, text="Try a different month or filter.",
+                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(9)).pack()
+            return
 
-    def _next_month(self):
-        self._month += 1
+        for t in rows:
+            self._tx_card(inner, t)
+
+    def _tx_card(self, parent, t):
+        # match web: wallet name as title, price x qty (total) - type - desc as body
+        date   = t.get("date_issued", "")[:10]
+        wallet = (t.get("wallet_name") or "").upper()
+        qty    = t["quantity"]
+        price  = t["price"]
+        total  = qty * price
+        kind   = t["kind"]
+        desc   = t.get("description") or ""
+
+        if kind == "income":
+            type_label = t.get("income_type") or ""
+            label_core = f"{price} x {qty} ({total}) - {type_label}"
+        else:
+            particulars = t.get("particulars") or ""
+            label_core  = f"{qty} x {price} ({total}) - {particulars}"
+
+        main_label = f"{label_core} - {desc}" if desc else label_core
+
+        color   = _INCOME_CLR if kind == "income" else _EXPENSE_CLR
+        amt_str = f"PHP {total:,.2f}" if kind == "income" else f"-PHP {total:,.2f}"
+
+        card = tk.Frame(parent, bg=BG_WHITE,
+                        highlightbackground="#ECDDC6",
+                        highlightthickness=1, padx=16, pady=12)
+        card.pack(fill="x", pady=5, padx=2)
+        card.bind("<Enter>", lambda e: card.config(highlightbackground="#E59E2C"))
+        card.bind("<Leave>", lambda e: card.config(highlightbackground="#ECDDC6"))
+
+        left = tk.Frame(card, bg=BG_WHITE)
+        left.pack(side="left", fill="x", expand=True)
+
+        tk.Label(left, text=wallet, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(10, "bold"), anchor="w").pack(anchor="w")
+        tk.Label(left, text=main_label, bg=BG_WHITE, fg=TEXT_MUTED,
+                 font=font(8), anchor="w").pack(anchor="w")
+        tk.Label(left, text=date, bg=BG_WHITE, fg="#999999",
+                 font=font(7), anchor="w").pack(anchor="w")
+
+        tk.Label(card, text=amt_str, bg=BG_WHITE, fg=color,
+                 font=font(11, "bold")).pack(side="right", anchor="center")
+
+    def _month_str(self):
+        return f"{MONTHS[self._month - 1]} {self._year}"
+
+    def _change_month(self, delta):
+        self._month += delta
         if self._month > 12:
             self._month = 1
             self._year += 1
-        self._update_month_label()
-        self.load()
+        elif self._month < 1:
+            self._month = 12
+            self._year -= 1
+        self._month_lbl.config(text=self._month_str())
+        self._refresh()
 
-    def _set_filter_style(self, f):
-        self._filter = f
-        for k, b in self._filter_btns.items():
-            if k == f:
-                b.config(bg=AMBER, fg="white")
+    def _set_filter(self, key):
+        self._filter = key
+        self._update_filter_styles()
+        self._refresh()
+
+    def _update_filter_styles(self):
+        for k, btn in self._filter_btns.items():
+            if k == self._filter:
+                btn.config(bg=_FILTER_ACTIVE, fg="white",
+                           highlightbackground=_FILTER_ACTIVE)
             else:
-                b.config(bg=WHITE, fg=TEXT_MUTE,
-                         highlightbackground=CREAM, highlightthickness=1)
-
-    def _set_filter(self, f):
-        self._set_filter_style(f)
-        self.load()
-
-    def load(self):
-        for w in self._tx_inner.winfo_children():
-            w.destroy()
-        org_id = self.org["id"]
-        try:
-            wres = supabase.table("wallets").select("id") \
-                           .eq("organization_id", org_id).execute()
-            wids = [w["id"] for w in (wres.data or [])]
-            if not wids:
-                tk.Label(self._tx_inner, text="No wallets found.",
-                         bg=WHITE, fg=TEXT_MUTE,
-                         font=("Poppins", 10)).pack(pady=40)
-                return
-
-            tres = supabase.table("wallet_transactions") \
-                           .select("kind,date_issued,quantity,price,description,particulars,income_type") \
-                           .in_("wallet_id", wids) \
-                           .order("date_issued", desc=True).execute()
-            txs = []
-            for tx in (tres.data or []):
-                d = tx.get("date_issued", "")[:10]
-                try:
-                    dt = datetime.strptime(d, "%Y-%m-%d")
-                    if dt.year != self._year or dt.month != self._month:
-                        continue
-                except Exception:
-                    continue
-                if self._filter != "all" and tx.get("kind") != self._filter:
-                    continue
-                txs.append(tx)
-
-            if not txs:
-                tk.Label(self._tx_inner,
-                         text="No transactions for this period.",
-                         bg=WHITE, fg=TEXT_MUTE,
-                         font=("Poppins", 10)).pack(pady=40)
-                return
-
-            for tx in txs:
-                kind  = tx.get("kind", "")
-                qty   = int(tx.get("quantity") or 0)
-                price = float(tx.get("price") or 0)
-                amt   = qty * price
-                color = GREEN_OK if kind == "income" else RED_ERR
-                sign  = "+" if kind == "income" else "-"
-
-                card = tk.Frame(self._tx_inner, bg=WHITE,
-                                highlightbackground=CREAM, highlightthickness=1)
-                card.pack(fill="x", pady=4, padx=2)
-
-                left = tk.Frame(card, bg=WHITE)
-                left.pack(side="left", fill="both", expand=True, padx=12, pady=8)
-                desc = tx.get("description") or tx.get("particulars", "")
-                tk.Label(left, text=desc[:40], bg=WHITE, fg=TEXT_DARK,
-                         font=("Poppins", 10, "bold"), anchor="w").pack(anchor="w")
-                sub = tx.get("income_type", "") or kind.capitalize()
-                tk.Label(left, text=sub, bg=WHITE, fg=TEXT_MUTE,
-                         font=("Poppins", 9), anchor="w").pack(anchor="w")
-                tk.Label(left, text=tx.get("date_issued", "")[:10],
-                         bg=WHITE, fg="#999999",
-                         font=("Poppins", 8), anchor="w").pack(anchor="w")
-
-                tk.Label(card, text=f"{sign}Php {amt:,.2f}",
-                         bg=WHITE, fg=color, font=("Poppins", 11, "bold"),
-                         padx=12).pack(side="right", pady=8)
-
-        except Exception as e:
-            messagebox.showerror("History Error", str(e))
+                btn.config(bg=BG_WHITE, fg=TEXT_DARK,
+                           highlightbackground=_FILTER_BORDER)
