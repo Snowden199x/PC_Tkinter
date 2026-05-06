@@ -31,10 +31,43 @@ class HistoryScreen(tk.Frame):
         self._build()
 
     def _build(self):
+        from PIL import Image, ImageDraw
         outer = tk.Frame(self, bg=BG_CREAM, padx=20, pady=16)
         outer.pack(fill="both", expand=True)
-        self._box = tk.Frame(outer, bg=BG_WHITE, padx=36, pady=28)
-        self._box.pack(fill="both", expand=True)
+
+        box_canvas = tk.Canvas(outer, bg=BG_CREAM, bd=0, highlightthickness=0)
+        box_canvas.pack(fill="both", expand=True)
+
+        self._box = tk.Frame(box_canvas, bg=BG_WHITE, padx=30, pady=24)
+        box_win = box_canvas.create_window(0, 0, anchor="nw", window=self._box)
+
+        def _draw_box_bg(event=None):
+            w = box_canvas.winfo_width()
+            h = box_canvas.winfo_height()
+            if w < 2 or h < 2:
+                return
+            r = 20
+            box_canvas.itemconfig(box_win, width=w - r * 2, height=h - r * 2)
+            box_canvas.coords(box_win, r, r)
+            scale = 4
+            sw, sh = w * scale, h * scale
+            cr = int(BG_CREAM.lstrip("#"), 16)
+            bg_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            img_bg = Image.new("RGBA", (sw, sh), bg_rgb + (255,))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1], radius=r * scale,
+                fill=(255, 255, 255, 255))
+            img_bg.paste(img, mask=img)
+            img_bg = img_bg.resize((w, h), Image.LANCZOS)
+            from PIL import ImageTk
+            ph = ImageTk.PhotoImage(img_bg)
+            box_canvas._bg_ph = ph
+            box_canvas.delete("box_bg")
+            box_canvas.create_image(0, 0, anchor="nw", image=ph, tags="box_bg")
+            box_canvas.tag_lower("box_bg")
+
+        box_canvas.bind("<Configure>", _draw_box_bg)
 
         # title
         tk.Label(self._box, text="Transaction History", bg=BG_WHITE,

@@ -194,3 +194,29 @@ def get_wallet_reports(org_id: int, wallet_id: int) -> list:
 def get_wallet_budget(wallet_id: int, year: int, month: int) -> float:
     res = _sb.table("wallet_budgets").select("amount").eq("wallet_id", wallet_id).eq("year", year).eq("month_id", month).execute()
     return res.data[0]["amount"] if res.data else 0.0
+
+
+def get_profile(org_id: int) -> dict:
+    org = _sb.table("organizations").select("*").eq("id", org_id).execute().data
+    if not org:
+        return {}
+    org = org[0]
+    dept = _sb.table("departments").select("dept_name").eq("id", org.get("department_id", 0)).execute().data
+    dept_name = dept[0]["dept_name"] if dept else ""
+    profile_row = _sb.table("profile_users").select("*").eq("organization_id", org_id).execute().data
+    profile = profile_row[0] if profile_row else {}
+    return {
+        "org_name":          org.get("org_name", ""),
+        "org_short_name":    profile.get("org_short_name") or "",
+        "department":        dept_name,
+        "school":            profile.get("school_name") or "Laguna State Polytechnic University, Sta. Cruz, Laguna (LSPU-SCC)",
+        "email":             profile.get("email") or "",
+        "accreditation_date": org.get("accreditation_date", ""),
+        "status":            org.get("status", ""),
+        "profile_photo_url": profile.get("profile_photo_url") or "",
+    }
+
+
+def get_officers(org_id: int) -> list:
+    res = _sb.table("profile_officers").select("*").eq("organization_id", org_id).order("created_at").execute()
+    return res.data or []
