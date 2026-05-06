@@ -1,0 +1,285 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: Poppins;
+}
+
+/* Background */
+body {
+  background: url("../images/log_in_bg.png") no-repeat center center fixed;
+  background-size: cover;
+  min-height: 100vh; /* ensures full height even if content grows */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: all 0.3s ease; /* smooth scaling */
+}
+
+/* Logo Section - positioned top-left */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  text-decoration: none;
+  cursor: pointer;
+  z-index: 10; /* keeps above other content */
+}
+
+.logo:hover {
+  opacity: 0.8;
+  transition: opacity 0.2s ease-in-out;
+}
+
+.logo img {
+  width: 71.22px;
+  height: 70px;
+}
+
+.logo_name {
+  font-weight: 500;
+  font-size: 28px;
+  color: #000;
+}
+
+/* Login Box */
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  flex-grow: 1;
+  padding: 20px; /* prevents cut-off edges when window is narrow */
+}
+
+.login-box {
+  background-color: #ffffff;
+  width: 100%;
+  max-width: 472px; /* this makes it fluidly shrink but never exceed design */
+  height: auto;
+  padding: 40px 45px;
+  border-radius: 24px;
+  box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  text-align: left;
+  position: relative;
+  top: -20px;
+  transition: all 0.3s ease;
+}
+
+.login-box h2 {
+  font-size: 32px;
+  font-weight: 600;
+  color: #000;
+  text-align: center;
+  margin-bottom: 8px;
+  margin-top: 10px;
+}
+
+.subtitle {
+  font-size: 14px;
+  font-weight: 400;
+  color: #616161;
+  text-align: center;
+  margin-bottom: 25px;
+}
+
+/* Form */
+form {
+  display: flex;
+  flex-direction: column;
+  margin-top: 40px;
+}
+
+label {
+  font-size: 13px;
+  font-weight: 400;
+  color: #828282;
+  margin-bottom: 6px;
+}
+
+input {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  outline: none;
+  font-size: 14px;
+  margin-bottom: 16px;
+  transition: all 0.3s ease-out;
+  width: 100%;
+}
+
+input:focus,
+input:hover {
+  border-color: #E59E2C;
+  box-shadow: 0px 1px 7.1px 2px rgba(243, 213, 141, 0.43);
+}
+
+.password-wrapper {
+  position: relative;
+}
+
+.password-wrapper input {
+  width: 100%;
+  padding-right: 40px; /* space for icon */
+}
+
+.password-icon {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-90%); /* centers vertically */
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+}
+
+/* Forgot Password */
+.forgot {
+  font-size: 12px;
+  color: #8B3B08;
+  text-align: right;
+  margin-bottom: 25px;
+  text-decoration: none;
+}
+
+.forgot:hover {
+  text-decoration: underline;
+}
+
+/* Button */
+.login-btn {
+  background-color: #F3D58D;
+  border: 1px solid #000;
+  color: #000;
+  font-weight: 600;
+  font-size: 20px;
+  padding: 5px 0;
+  border-radius: 25px;
+  cursor: pointer;
+  transition: background 0.3s ease-out;
+  margin-top: 40px;
+}
+
+.login-btn:hover {
+  background-color: #E59E2C;
+  color: #ffffff;
+}
+
+/* Error message styling */
+.error-message {
+  color: red;
+  font-size: 12px;
+  margin-top: -10px;
+  margin-bottom: 10px;
+  display: none;
+}
+.flash-message {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* red for danger */
+.flash-message.danger {
+  background-color: #ffe5e5;
+  color: #c0392b;
+  border: 1px solid #e74c3c;
+}
+.flash-message.success {
+  background-color: #e8f8f1;
+  color: #1e8449;
+  border: 1px solid #2ecc71;
+}
+
+
+/* Shake animation */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-8px); }
+  40%, 80% { transform: translateX(8px); }
+}
+
+.shake {
+  animation: shake 0.4s ease;
+  border-color: red !important;
+}
+
+/* ---------------------- */
+/* 📱 RESPONSIVE STYLES  */
+/* ---------------------- */
+
+/* Tablets (≤1024px) */
+@media (max-width: 1024px) {
+  .login-box {
+    max-width: 420px;
+    padding: 35px 40px;
+  }
+  .login-box h2 { font-size: 28px; }
+  .login-btn { font-size: 18px; }
+  .logo img { width: 60px; height: 58px; }
+  .logo_name { font-size: 24px; }
+}
+
+/* Small tablets & large phones (≤768px) */
+@media (max-width: 768px) {
+  body {
+    background-position: center;
+    background-attachment: scroll;
+  }
+  .login-box {
+    max-width: 85%;
+    padding: 30px 25px;
+  }
+  .login-box h2 { font-size: 26px; }
+  .subtitle { font-size: 13px; }
+  .login-btn { font-size: 18px; }
+  input { font-size: 13px; }
+  .logo { top: 10px; left: 10px; }
+  .logo img { width: 55px; height: 54px; }
+  .logo_name { font-size: 22px; }
+}
+
+/* Mobile phones (≤480px) */
+@media (max-width: 480px) {
+  body {
+    background-size: cover;
+    padding: 10px;
+  }
+  .login-box {
+    width: 100%;
+    padding: 25px 20px;
+    border-radius: 16px;
+  }
+  .login-box h2 { font-size: 22px; }
+  .subtitle { font-size: 12px; }
+  label { font-size: 12px; }
+  input {
+    font-size: 12px;
+    padding: 8px;
+  }
+  .login-btn {
+    font-size: 16px;
+    padding: 8px 0;
+  }
+  .logo {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .logo img {
+    width: 48px;
+    height: 46px;
+  }
+  .logo_name { font-size: 20px; }
+}

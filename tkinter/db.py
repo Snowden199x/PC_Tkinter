@@ -170,14 +170,11 @@ def get_wallets(org_id: int) -> list:
 
 
 def get_wallet_transactions(wallet_id: int, kind_filter: str = "all",
-                            year: int = None, month: int = None) -> list:
+                            year: int = None, month: int = None,
+                            budget_id: int = None) -> list:
     q = _sb.table("wallet_transactions").select("*").eq("wallet_id", wallet_id)
-    if year and month:
-        month_str = f"{year}-{month:02d}"
-        next_year  = year + 1 if month == 12 else year
-        next_month = 1 if month == 12 else month + 1
-        next_str   = f"{next_year}-{next_month:02d}"
-        q = q.gte("date_issued", f"{month_str}-01").lt("date_issued", f"{next_str}-01")
+    if budget_id is not None:
+        q = q.eq("budget_id", budget_id)
     if kind_filter != "all":
         q = q.eq("kind", kind_filter)
     return q.order("date_issued", desc=True).execute().data or []
@@ -194,6 +191,49 @@ def get_wallet_reports(org_id: int, wallet_id: int) -> list:
 def get_wallet_budget(wallet_id: int, year: int, month: int) -> float:
     res = _sb.table("wallet_budgets").select("amount").eq("wallet_id", wallet_id).eq("year", year).eq("month_id", month).execute()
     return res.data[0]["amount"] if res.data else 0.0
+
+
+def upsert_wallet_budget(budget_id: int, amount: float) -> dict:
+    res = _sb.table("wallet_budgets").update({"amount": amount}).eq("id", budget_id).execute()
+    return res.data[0] if res.data else {}
+
+
+def add_wallet_transaction(wallet_id: int, budget_id: int, kind: str,
+                           date_issued: str, quantity: int,
+                           income_type: str, particulars: str,
+                           description: str, price: float) -> dict:
+    payload = {
+        "wallet_id":   wallet_id,
+        "budget_id":   budget_id,
+        "kind":        kind,
+        "date_issued": date_issued,
+        "quantity":    quantity,
+        "income_type": income_type or None,
+        "particulars": particulars or None,
+        "description": description,
+        "price":       price,
+    }
+    res = _sb.table("wallet_transactions").insert(payload).execute()
+    return res.data[0] if res.data else {}
+
+
+def update_wallet_transaction(tx_id: int, date_issued: str, quantity: int,
+                              income_type: str, particulars: str,
+                              description: str, price: float) -> dict:
+    payload = {
+        "date_issued": date_issued,
+        "quantity":    quantity,
+        "income_type": income_type or None,
+        "particulars": particulars or None,
+        "description": description,
+        "price":       price,
+    }
+    res = _sb.table("wallet_transactions").update(payload).eq("id", tx_id).execute()
+    return res.data[0] if res.data else {}
+
+
+def delete_wallet_transaction(tx_id: int) -> None:
+    _sb.table("wallet_transactions").delete().eq("id", tx_id).execute()
 
 
 def get_profile(org_id: int) -> dict:
