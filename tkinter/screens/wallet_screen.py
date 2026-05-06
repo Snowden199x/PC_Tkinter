@@ -32,6 +32,25 @@ def _img(name, w, h, cache):
         return None
 
 
+def _img_rounded(name, w, h, radius, cache):
+    """Load image with rounded corners using a PIL mask."""
+    path = _os.path.join(_ASSETS, name)
+    if not _os.path.exists(path):
+        return None
+    try:
+        from PIL import ImageDraw
+        img = Image.open(path).resize((w, h), Image.LANCZOS).convert("RGBA")
+        mask = Image.new("L", (w, h), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle((0, 0, w, h), radius=radius, fill=255)
+        img.putalpha(mask)
+        ph = ImageTk.PhotoImage(img)
+        cache.append(ph)
+        return ph
+    except Exception:
+        return _img(name, w, h, cache)
+
+
 class WalletScreen(tk.Frame):
     def __init__(self, parent, org=None, **kwargs):
         super().__init__(parent, bg=BG_CREAM, **kwargs)
@@ -45,8 +64,40 @@ class WalletScreen(tk.Frame):
     def _build(self):
         outer = tk.Frame(self, bg=BG_CREAM, padx=20, pady=16)
         outer.pack(fill="both", expand=True)
-        self._box = tk.Frame(outer, bg=BG_WHITE, padx=36, pady=28)
-        self._box.pack(fill="both", expand=True)
+
+        box_canvas = tk.Canvas(outer, bg=BG_CREAM, bd=0, highlightthickness=0)
+        box_canvas.pack(fill="both", expand=True)
+
+        self._box = tk.Frame(box_canvas, bg=BG_WHITE, padx=30, pady=24)
+        box_win = box_canvas.create_window(0, 0, anchor="nw", window=self._box)
+
+        def _draw_box_bg(event=None):
+            w = box_canvas.winfo_width()
+            h = box_canvas.winfo_height()
+            if w < 2 or h < 2:
+                return
+            r = 20
+            box_canvas.itemconfig(box_win, width=w - r * 2, height=h - r * 2)
+            box_canvas.coords(box_win, r, r)
+            scale = 4
+            sw, sh = w * scale, h * scale
+            from PIL import Image, ImageDraw
+            cr = int(BG_CREAM.lstrip("#"), 16)
+            bg_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            img_bg = Image.new("RGBA", (sw, sh), bg_rgb + (255,))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1], radius=r * scale,
+                fill=(255, 255, 255, 255))
+            img_bg.paste(img, mask=img)
+            img_bg = img_bg.resize((w, h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img_bg)
+            box_canvas._bg_ph = ph
+            box_canvas.delete("box_bg")
+            box_canvas.create_image(0, 0, anchor="nw", image=ph, tags="box_bg")
+            box_canvas.tag_lower("box_bg")
+
+        box_canvas.bind("<Configure>", _draw_box_bg)
         self._show_list_view()
 
     # ══════════════════════════════════════════════════════════════════
@@ -137,7 +188,7 @@ class WalletScreen(tk.Frame):
 
         self._all_wallets  = all_wallets
         self._wallet_cards = []
-        wallet_img = _img("wallet.png", 160, 150, self._imgs)
+        wallet_img = _img_rounded("wallet.png", 240, 200, 14, self._imgs)
         self._wallet_img   = wallet_img
 
         # wire up filters — rebuild grid on change
@@ -180,14 +231,13 @@ class WalletScreen(tk.Frame):
             self._wallet_cards.append((card, w))
 
     def _wallet_card(self, parent, w, color, wallet_img):
-        CARD_W, CARD_H = 160, 150
+        CARD_W, CARD_H = 240, 200
 
-        outer = tk.Frame(parent, bg=BG_WHITE, cursor="hand2")
-        outer.pack(side="left", padx=(0, 8))
+        outer = tk.Frame(parent, bg="white", cursor="hand2")
+        outer.pack(side="left", padx=(0, 12), pady=4)
 
         cv = tk.Canvas(outer, width=CARD_W, height=CARD_H,
-                       bd=0, highlightthickness=2,
-                       highlightbackground="#ddd", bg=color)
+                       bd=0, highlightthickness=0, bg="white")
         cv.pack()
 
         if wallet_img:
@@ -204,8 +254,8 @@ class WalletScreen(tk.Frame):
                        text=month_name, anchor="w",
                        font=font(8, "bold"), fill=TEXT_DARK)
 
-        def _enter(e): cv.config(highlightbackground=_BTN_BROWN, highlightthickness=2)
-        def _leave(e): cv.config(highlightbackground="#ddd", highlightthickness=1)
+        def _enter(e): cv.config(bg="#F5F1E8")
+        def _leave(e): cv.config(bg="white")
         def _click(e, wallet=w): self._show_detail_view(wallet)
 
         for widget in (outer, cv):

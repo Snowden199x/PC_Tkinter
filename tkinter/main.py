@@ -108,7 +108,7 @@ class PockiTrackApp(tk.Tk):
 
         elif screen_name == "profile":
             self._show_sidebar()
-            ProfileScreen(self._content).pack(fill="both", expand=True)
+            ProfileScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "logout":
             self._hide_sidebar()
