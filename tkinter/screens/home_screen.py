@@ -173,6 +173,8 @@ class HomeScreen(tk.Frame):
                 s = (t - 0.54) / 0.46
                 base = tuple(int(c2[i] + (c3[i] - c2[i]) * s) for i in range(3))
             blended = tuple(int(base[i] * 0.6 + 255 * 0.4) for i in range(3))
+            # exact gradient color at card center (no blending) for canvas bg
+            exact_bg = "#{:02x}{:02x}{:02x}".format(*base)
             mask = Image.new("L", (sw, sh), 0)
             ImageDraw.Draw(mask).rounded_rectangle([0, 0, sw-1, sh-1], radius=r, fill=255)
             card_img = Image.new("RGBA", (sw, sh), blended + (255,))
@@ -184,7 +186,7 @@ class HomeScreen(tk.Frame):
             cv.create_image(0, 0, anchor="nw", image=ph, tags="card_bg")
             cv.tag_lower("card_bg")
             hex_bg = "#{:02x}{:02x}{:02x}".format(*blended)
-            cv.config(bg=hex_bg)          # ← fixes the white corner bleed
+            cv.config(bg=exact_bg)  # match exact gradient so corners are invisible
             lbl_w.config(bg=hex_bg)
             val_w.config(bg=hex_bg)
             lbl_w.place(x=14, y=10)

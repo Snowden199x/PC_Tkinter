@@ -236,6 +236,41 @@ def delete_wallet_transaction(tx_id: int) -> None:
     _sb.table("wallet_transactions").delete().eq("id", tx_id).execute()
 
 
+def add_financial_report(org_id: int, wallet_id: int, budget_id: int,
+                         event_name: str, date_prepared: str, report_no: str,
+                         budget: float, total_income: float, total_expense: float,
+                         reimbursement: float, prev_fund: float,
+                         budget_in_bank: float) -> dict:
+    payload = {
+        "organization_id":   org_id,
+        "wallet_id":         wallet_id,
+        "budget_id":         budget_id,
+        "event_name":        event_name,
+        "date_prepared":     date_prepared,
+        "report_no":         report_no or None,
+        "budget":            budget,
+        "total_income":      total_income,
+        "total_expense":     total_expense,
+        "reimbursement":     reimbursement,
+        "previous_fund":     prev_fund,
+        "budget_in_the_bank": budget_in_bank,
+        "status":            "Pending Review",
+        "notes":             None,
+        "checklist":         {},
+    }
+    res = _sb.table("financial_reports").insert(payload).execute()
+    return res.data[0] if res.data else {}
+
+
+def get_latest_report(org_id: int, wallet_id: int, budget_id: int) -> dict:
+    res = _sb.table("financial_reports").select("*") \
+        .eq("organization_id", org_id) \
+        .eq("wallet_id", wallet_id) \
+        .eq("budget_id", budget_id) \
+        .order("created_at", desc=True).limit(1).execute()
+    return res.data[0] if res.data else {}
+
+
 def get_profile(org_id: int) -> dict:
     org = _sb.table("organizations").select("*").eq("id", org_id).execute().data
     if not org:
