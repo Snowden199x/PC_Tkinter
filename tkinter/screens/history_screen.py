@@ -28,10 +28,43 @@ class HistoryScreen(tk.Frame):
         self._build()
 
     def _build(self):
+        from PIL import Image, ImageDraw
         outer = tk.Frame(self, bg=BG_CREAM, padx=20, pady=16)
         outer.pack(fill="both", expand=True)
-        self._box = tk.Frame(outer, bg=BG_WHITE, padx=36, pady=28)
-        self._box.pack(fill="both", expand=True)
+
+        box_canvas = tk.Canvas(outer, bg=BG_CREAM, bd=0, highlightthickness=0)
+        box_canvas.pack(fill="both", expand=True)
+
+        self._box = tk.Frame(box_canvas, bg=BG_WHITE, padx=30, pady=24)
+        box_win = box_canvas.create_window(0, 0, anchor="nw", window=self._box)
+
+        def _draw_box_bg(event=None):
+            w = box_canvas.winfo_width()
+            h = box_canvas.winfo_height()
+            if w < 2 or h < 2:
+                return
+            r = 20
+            box_canvas.itemconfig(box_win, width=w - r * 2, height=h - r * 2)
+            box_canvas.coords(box_win, r, r)
+            scale = 4
+            sw, sh = w * scale, h * scale
+            cr = int(BG_CREAM.lstrip("#"), 16)
+            bg_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            img_bg = Image.new("RGBA", (sw, sh), bg_rgb + (255,))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1], radius=r * scale,
+                fill=(255, 255, 255, 255))
+            img_bg.paste(img, mask=img)
+            img_bg = img_bg.resize((w, h), Image.LANCZOS)
+            from PIL import ImageTk
+            ph = ImageTk.PhotoImage(img_bg)
+            box_canvas._bg_ph = ph
+            box_canvas.delete("box_bg")
+            box_canvas.create_image(0, 0, anchor="nw", image=ph, tags="box_bg")
+            box_canvas.tag_lower("box_bg")
+
+        box_canvas.bind("<Configure>", _draw_box_bg)
 
         # title
         tk.Label(self._box, text="Transaction History", bg=BG_WHITE,
@@ -103,7 +136,9 @@ class HistoryScreen(tk.Frame):
         sb = ttk.Scrollbar(self._list_outer, orient="vertical", command=canvas.yview)
         inner = tk.Frame(canvas, bg=BG_WHITE)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        # keep inner frame as wide as the canvas so cards stretch full width
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -118,56 +153,111 @@ class HistoryScreen(tk.Frame):
                     lambda e: canvas.unbind_all("<MouseWheel>") if e.widget is canvas else None)
 
         if not rows:
-            tk.Label(inner, text="No transactions found.",
-                     bg=BG_WHITE, fg=TEXT_DARK, font=font(12, "bold")).pack(pady=20)
-            tk.Label(inner, text="Try a different month or filter.",
-                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(9)).pack()
+            frm = tk.Frame(inner, bg=BG_WHITE)
+            frm.pack(expand=True, pady=40)
+            tk.Label(frm, text="No transactions found.",
+                     bg=BG_WHITE, fg=TEXT_DARK, font=font(11, "bold")).pack()
+            tk.Label(frm, text="Try a different month or filter.",
+                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(9)).pack(pady=(4, 0))
             return
 
         for t in rows:
             self._tx_card(inner, t)
 
     def _tx_card(self, parent, t):
-        # match web: wallet name as title, price x qty (total) - type - desc as body
-        date   = t.get("date_issued", "")[:10]
-        wallet = (t.get("wallet_name") or "").upper()
-        qty    = t["quantity"]
-        price  = t["price"]
-        total  = qty * price
-        kind   = t["kind"]
-        desc   = t.get("description") or ""
+        """Same card format as wallet screen _tx_item, with rounded border."""
+        from PIL import Image, ImageDraw, ImageTk as _ITk
+        date  = t.get("date_issued", "")[:10]
+        desc  = t.get("description") or "—"
+        qty   = t.get("quantity", 1)
+        price = t.get("price", 0)
+        total = qty * price
+        kind  = t["kind"]
+        amt   = total if kind == "income" else -total
+        qty_line = f"{price:,.2f} x {qty} ({total:,.2f})"
+
+        try:
+            month_label = datetime.strptime(date, "%Y-%m-%d").strftime("%B").upper()
+        except Exception:
+            month_label = date
 
         if kind == "income":
-            type_label = t.get("income_type") or ""
-            label_core = f"{price} x {qty} ({total}) - {type_label}"
+            income_type = t.get("income_type") or "—"
+            subtitle = f"{qty_line}  ·  {income_type}  ·  {desc}"
         else:
-            particulars = t.get("particulars") or ""
-            label_core  = f"{qty} x {price} ({total}) - {particulars}"
+            particulars = t.get("particulars") or "—"
+            subtitle = f"{qty_line}  ·  {particulars}  ·  {desc}"
 
-        main_label = f"{label_core} - {desc}" if desc else label_core
+        wallet_name = (t.get("wallet_name") or "").strip()
+        color = _INCOME_CLR if amt >= 0 else _EXPENSE_CLR
+        sign  = "+" if amt >= 0 else "-"
 
-        color   = _INCOME_CLR if kind == "income" else _EXPENSE_CLR
-        amt_str = f"PHP {total:,.2f}" if kind == "income" else f"-PHP {total:,.2f}"
+        RADIUS  = 12
+        BDR_CLR = "#ECDDC6"
+        HOV_CLR = "#E59E2C"
+        INSET   = 2   # border thickness in screen pixels
 
-        card = tk.Frame(parent, bg=BG_WHITE,
-                        highlightbackground="#ECDDC6",
-                        highlightthickness=1, padx=16, pady=12)
-        card.pack(fill="x", pady=5, padx=2)
-        card.bind("<Enter>", lambda e: card.config(highlightbackground="#E59E2C"))
-        card.bind("<Leave>", lambda e: card.config(highlightbackground="#ECDDC6"))
+        cv = tk.Canvas(parent, bg=BG_WHITE, bd=0, highlightthickness=0)
+        cv.pack(fill="x", pady=4, padx=4)
 
-        left = tk.Frame(card, bg=BG_WHITE)
+        content = tk.Frame(cv, bg=BG_WHITE, padx=14, pady=10)
+        content_win = cv.create_window(INSET, INSET, anchor="nw", window=content)
+
+        def _draw(hover=False):
+            bw = cv.winfo_width()
+            ch = content.winfo_reqheight()
+            if bw < 8 or ch < 4:
+                return
+            bh = ch + INSET * 2
+            cv.config(height=bh)
+            cv.itemconfig(content_win, width=bw - INSET * 2)
+
+            bdr = HOV_CLR if hover else BDR_CLR
+            # render at 8× scale for smooth anti-aliased corners
+            scale = 8
+            sw, sh = bw * scale, bh * scale
+            r = RADIUS * scale
+            cr = int(bdr.lstrip("#"), 16)
+            bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            # use solid RGB (no alpha) — parent bg is white so no bleed-through
+            img = Image.new("RGB", (sw, sh), (255, 255, 255))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1], radius=r,
+                fill=(255, 255, 255),
+                outline=bdr_rgb, width=10)
+            img = img.resize((bw, bh), Image.LANCZOS)
+            ph = _ITk.PhotoImage(img)
+            cv._ph = ph
+            cv.delete("bg")
+            cv.create_image(0, 0, anchor="nw", image=ph, tags="bg")
+            cv.tag_lower("bg")
+
+        # bind to size changes — use after() to let layout settle first
+        content.bind("<Configure>", lambda e: cv.after(0, _draw))
+        cv.bind("<Configure>",      lambda e: cv.after(0, _draw))
+        for w in (cv, content):
+            w.bind("<Enter>", lambda e: _draw(hover=True))
+            w.bind("<Leave>", lambda e: _draw(hover=False))
+        # initial draw after everything is packed
+        cv.after(50, _draw)
+
+        # ── card content ──────────────────────────────────────────────
+        left = tk.Frame(content, bg=BG_WHITE)
         left.pack(side="left", fill="x", expand=True)
 
-        tk.Label(left, text=wallet, bg=BG_WHITE, fg=TEXT_DARK,
-                 font=font(10, "bold"), anchor="w").pack(anchor="w")
-        tk.Label(left, text=main_label, bg=BG_WHITE, fg=TEXT_MUTED,
+        tk.Label(left, text=month_label, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(9, "bold"), anchor="w").pack(anchor="w")
+        tk.Label(left, text=subtitle, bg=BG_WHITE, fg=TEXT_MUTED,
                  font=font(8), anchor="w").pack(anchor="w")
+        if wallet_name:
+            tk.Label(left, text=wallet_name, bg=BG_WHITE, fg="#999999",
+                     font=font(7), anchor="w").pack(anchor="w")
         tk.Label(left, text=date, bg=BG_WHITE, fg="#999999",
                  font=font(7), anchor="w").pack(anchor="w")
 
-        tk.Label(card, text=amt_str, bg=BG_WHITE, fg=color,
-                 font=font(11, "bold")).pack(side="right", anchor="center")
+        tk.Label(content, text=f"{sign}₱{abs(amt):,.2f}",
+                 bg=BG_WHITE, fg=color,
+                 font=font(10, "bold")).pack(side="right", anchor="center")
 
     def _month_str(self):
         return f"{MONTHS[self._month - 1]} {self._year}"

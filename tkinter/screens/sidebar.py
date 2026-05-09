@@ -86,15 +86,40 @@ class Sidebar(tk.Frame):
                                   ico_dark, ico_white)
             self._btns[key] = btn
 
+    def _draw_pill(self, canvas, colour):
+        canvas.delete("pill_bg")
+        w = canvas.winfo_width() or int(canvas["width"])
+        h = canvas.winfo_height() or int(canvas["height"])
+        if w < 2 or h < 2:
+            return
+        scale = 4
+        sw, sh = w * scale, h * scale
+        r = (h // 2) * scale
+        img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img)
+        cr = int(colour.lstrip("#"), 16)
+        rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+        draw.rounded_rectangle([0, 0, sw - 1, sh - 1], radius=r, fill=rgb + (255,))
+        img = img.resize((w, h), Image.LANCZOS)
+        ph = ImageTk.PhotoImage(img)
+        self._imgs.append(ph)
+        canvas._ph = ph
+        canvas.create_image(0, 0, anchor="nw", image=ph, tags="pill_bg")
+        canvas.tag_lower("pill_bg")
+
     def _make_pill(self, parent, key, label, ico_dark, ico_white):
         # outer frame (cream bg, full width)
         outer = tk.Frame(parent, bg=_BG, cursor="hand2")
         outer.pack(fill="x", pady=4)
 
-        # pill frame — 226×46, radius faked with padx/pady + bg colour
-        pill = tk.Frame(outer, bg=_BG, height=46)
+        # pill canvas — rounded highlight background
+        pill = tk.Canvas(outer, bg=_BG, height=46,
+                         bd=0, highlightthickness=0)
         pill.pack(fill="x")
-        pill.pack_propagate(False)
+        pill.bind("<Configure>",
+                  lambda e, c=pill: self._draw_pill(c, c._pill_colour))
+        pill._pill_colour = _BG
 
         inner = tk.Frame(pill, bg=_BG)
         inner.place(relx=0, rely=0.5, anchor="w", x=12)
@@ -186,7 +211,8 @@ class Sidebar(tk.Frame):
     def _set_pill_style(self, btn, bg, fg, icon_state):
         ico = btn._ico_white if icon_state == "white" else btn._ico_dark
         btn.config(bg=bg)
-        btn._pill.config(bg=bg)
+        btn._pill._pill_colour = bg
+        self._draw_pill(btn._pill, bg)
         btn._inner.config(bg=bg)
         btn._lbl_icon.config(bg=bg, fg=fg,
                              image=ico if ico else "",

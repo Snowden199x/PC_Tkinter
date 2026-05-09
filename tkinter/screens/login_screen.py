@@ -15,11 +15,12 @@ TEXT_MUTED = "#616161"
 BORDER = "#ddd"
 
 class LoginScreen(tk.Frame):
-    def __init__(self, parent, on_login_success, on_back):
+    def __init__(self, parent, on_login_success, on_back, on_forgot=None):
         super().__init__(parent, bg=BG_COLOR)
 
         self.on_login_success = on_login_success
         self.on_back = on_back
+        self.on_forgot = on_forgot
         self.images = {}
 
         self._build()
@@ -182,12 +183,16 @@ class LoginScreen(tk.Frame):
         self.error_lbl.pack(anchor="w", pady=(6, 0))
 
         # FORGOT PASSWORD
-        tk.Label(form,
+        forgot_lbl = tk.Label(form,
                  text="Forgot password?",
                  fg=PRIMARY,
                  cursor="hand2",
                  font=("Poppins", 9),
-                 bg="white").pack(anchor="e", pady=10)
+                 bg="white")
+        forgot_lbl.pack(anchor="e", pady=10)
+        forgot_lbl.bind("<Button-1>", lambda e: self.on_forgot() if self.on_forgot else None)
+        forgot_lbl.bind("<Enter>", lambda e: forgot_lbl.config(fg=PRIMARY_HOVER))
+        forgot_lbl.bind("<Leave>", lambda e: forgot_lbl.config(fg=PRIMARY))
 
         # ===== BUTTON =====
         btn = tk.Canvas(box, width=220, height=45,

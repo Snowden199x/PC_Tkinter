@@ -18,6 +18,7 @@ from screens.home_screen   import HomeScreen
 from screens.history_screen import HistoryScreen
 from screens.wallet_screen import WalletScreen
 from screens.profile_screen import ProfileScreen
+from screens.forgotpass_screen import ForgotPassScreen
 
 
 class PockiTrackApp(tk.Tk):
@@ -55,21 +56,24 @@ class PockiTrackApp(tk.Tk):
     # ── Poppins font loader ───────────────────────────────────────────
     def _try_load_poppins(self):
         """Try to register Poppins from a fonts/ directory if present."""
-        fonts_dir = os.path.join(BASE_DIR, "fonts")
+        fonts_dir = os.path.join(BASE_DIR, "assets", "fonts")
         if not os.path.isdir(fonts_dir):
             return
         try:
-            from tkinter import font as tkfont
+            # Windows: Add font using GDI
             for f in os.listdir(fonts_dir):
-                if f.lower().endswith((".ttf", ".otf")):
-                    path = os.path.join(fonts_dir, f)
-                    self.tk.call("font", "create", f.split(".")[0])
+                if f.lower().endswith(".ttf"):
+                    font_path = os.path.join(fonts_dir, f)
                     try:
-                        self.tk.call("lappend", "::auto_path", fonts_dir)
+                        from ctypes import windll
+                        windll.gdi32.AddFontResourceW(font_path)
+                        windll.user32.SendMessageW(0xFFFF, 0x001D, 0, 0)
                     except Exception:
                         pass
         except Exception:
             pass
+        except Exception as e:
+            print(f"Font loading note: {e}")
 
     # ── Navigation ────────────────────────────────────────────────────
     def _show(self, screen_name):
@@ -88,7 +92,14 @@ class PockiTrackApp(tk.Tk):
             self._hide_sidebar()
             LoginScreen(self._content,
                         on_login_success=self._post_login,
-                        on_back=lambda: self._show("start")).pack(
+                        on_back=lambda: self._show("start"),
+                        on_forgot=lambda: self._show("forgot")).pack(
+                fill="both", expand=True)
+
+        elif screen_name == "forgot":
+            self._hide_sidebar()
+            ForgotPassScreen(self._content,
+                             on_back=lambda: self._show("login")).pack(
                 fill="both", expand=True)
 
         elif screen_name == "home":
@@ -105,7 +116,7 @@ class PockiTrackApp(tk.Tk):
 
         elif screen_name == "profile":
             self._show_sidebar()
-            ProfileScreen(self._content).pack(fill="both", expand=True)
+            ProfileScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "logout":
             self._hide_sidebar()
@@ -140,3 +151,4 @@ class PockiTrackApp(tk.Tk):
 if __name__ == "__main__":
     app = PockiTrackApp()
     app.mainloop()
+#1
