@@ -552,6 +552,103 @@ def delete_officer(officer_id: int, org_id: int) -> None:
     _sb.table("profile_officers").delete().eq("id", officer_id).eq("organization_id", org_id).execute()
 
 
+def request_password_reset(identifier: str) -> str:
+    """
+    Mirror of web's POST /pres/forgot-password.
+    Generates a reset code, saves it to profile_users, and sends the
+    same HTML email as the web using Gmail SMTP (credentials from .env).
+    Returns the email address if found, None otherwise.
+    """
+    import secrets, string, smtplib, os as _os2
+    from datetime import datetime as _dt, timezone, timedelta
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    # 1. look up by email in profile_users
+    res = _sb.table("profile_users").select("id,organization_id,email") \
+        .eq("email", identifier).limit(1).execute()
+
+    # 2. fallback: look up by org username
+    if not res.data:
+        org_res = _sb.table("organizations").select("id,username") \
+            .eq("username", identifier).limit(1).execute()
+        if org_res.data:
+            org_id = org_res.data[0]["id"]
+            res = _sb.table("profile_users").select("id,organization_id,email") \
+                .eq("organization_id", org_id).limit(1).execute()
+
+    if not res.data:
+        return None   # not found — caller shows generic message
+
+    user  = res.data[0]
+    email = user.get("email")
+    if not email:
+        return None
+
+    # 3. get org name for the email greeting
+    org_name = "PockiTrack Organization"
+    org_id   = user.get("organization_id")
+    if org_id:
+        org_res2 = _sb.table("organizations").select("org_name") \
+            .eq("id", org_id).limit(1).execute()
+        if org_res2.data:
+            org_name = org_res2.data[0].get("org_name") or org_name
+
+    # 4. generate 6-digit code and save with 15-min expiry
+    code       = "".join(secrets.choice(string.digits) for _ in range(6))
+    expires_at = (_dt.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+    _sb.table("profile_users").update({
+        "reset_code":            code,
+        "reset_code_expires_at": expires_at,
+    }).eq("id", user["id"]).execute()
+
+    # 5. build reset link — points to the web app's change-password page.
+    #    WEB_BASE_URL in .env must match the address you use to open the web app
+    #    in your browser (e.g. http://192.168.1.13:5000).
+    web_base   = os.getenv("WEB_BASE_URL", "http://192.168.1.13:5000").rstrip("/")
+    reset_link = f"{web_base}/pres/change-password?code={code}&email={email}"
+
+    banner_url   = os.getenv("BANNER_URL", "")
+    requested_at = _dt.now().strftime("%b %d, %Y %I:%M %p")
+
+    # 6. build HTML body from the Python template (no file reading needed)
+    from email_templates import reset_password_email
+    html_body = reset_password_email(
+        org_name     = org_name,
+        reset_link   = reset_link,
+        to_email     = email,
+        requested_at = requested_at,
+        banner_url   = banner_url,
+    )
+
+    # 7. send via Gmail SMTP
+    mail_user = os.getenv("MAIL_USERNAME", "")
+    mail_pass = os.getenv("MAIL_PASSWORD", "")
+
+    if mail_user and mail_pass:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "PockiTrack Password Reset"
+        msg["From"]    = mail_user
+        msg["To"]      = email
+
+        plain = (
+            f"Hi {org_name},\n\n"
+            "You requested to reset your PockiTrack password.\n\n"
+            f"Use this link (valid 15 minutes):\n{reset_link}\n\n"
+            "If you did not request this, ignore this email.\n\n"
+            "Regards,\nPockiTrack Team"
+        )
+        msg.attach(MIMEText(plain, "plain"))
+        if html_body:
+            msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(mail_user, mail_pass)
+            smtp.sendmail(mail_user, email, msg.as_string())
+
+    return email
+
+
 def submit_report(org_id: int, wallet_id: int, budget_id: int) -> dict:
     """
     Mirror of web's POST /reports/<wallet_id>/submit.

@@ -18,6 +18,7 @@ from screens.home_screen   import HomeScreen
 from screens.history_screen import HistoryScreen
 from screens.wallet_screen import WalletScreen
 from screens.profile_screen import ProfileScreen
+from screens.forgotpass_screen import ForgotPassScreen
 
 
 class PockiTrackApp(tk.Tk):
@@ -91,7 +92,14 @@ class PockiTrackApp(tk.Tk):
             self._hide_sidebar()
             LoginScreen(self._content,
                         on_login_success=self._post_login,
-                        on_back=lambda: self._show("start")).pack(
+                        on_back=lambda: self._show("start"),
+                        on_forgot=lambda: self._show("forgot")).pack(
+                fill="both", expand=True)
+
+        elif screen_name == "forgot":
+            self._hide_sidebar()
+            ForgotPassScreen(self._content,
+                             on_back=lambda: self._show("login")).pack(
                 fill="both", expand=True)
 
         elif screen_name == "home":
