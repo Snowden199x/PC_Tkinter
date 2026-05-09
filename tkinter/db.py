@@ -180,12 +180,89 @@ def get_wallet_transactions(wallet_id: int, kind_filter: str = "all",
     return q.order("date_issued", desc=True).execute().data or []
 
 
-def get_wallet_receipts(wallet_id: int) -> list:
-    return _sb.table("wallet_receipts").select("*").eq("wallet_id", wallet_id).order("created_at", desc=True).execute().data or []
+def get_wallet_receipts(wallet_id: int, budget_id: int = None) -> list:
+    """Return receipts for a wallet, optionally scoped to a specific month (budget_id)."""
+    q = _sb.table("wallet_receipts").select("*").eq("wallet_id", wallet_id)
+    if budget_id is not None:
+        q = q.eq("budget_id", budget_id)
+    return q.order("receipt_date", desc=True).execute().data or []
+
+
+def add_wallet_receipt(wallet_id: int, budget_id: int,
+                       org_id: int, org_name: str,
+                       wallet_name: str, month_name: str,
+                       file_bytes: bytes, filename: str,
+                       description: str, receipt_date: str) -> dict:
+    """Upload receipt file to Supabase Storage and insert wallet_receipts row."""
+    import re
+    from uuid import uuid4
+
+    def _slug(s):
+        return re.sub(r"[^a-z0-9]+", "-", (s or "unknown").lower()).strip("-")
+
+    ext = os.path.splitext(filename)[1] or ".png"
+    path = f"{_slug(org_name)}/{_slug(wallet_name)}/{_slug(month_name)}/{uuid4()}{ext}"
+
+    _sb.storage.from_("Receipts").upload(path, file_bytes)
+
+    res = _sb.table("wallet_receipts").insert({
+        "wallet_id":    wallet_id,
+        "budget_id":    budget_id,
+        "file_url":     path,
+        "description":  description,
+        "receipt_date": receipt_date,
+    }).execute()
+    return res.data[0] if res.data else {}
+
+
+def get_receipt_public_url(file_path: str) -> str:
+    """Return the public URL for a receipt stored in Supabase Storage."""
+    public = _sb.storage.from_("Receipts").get_public_url(file_path)
+    return public.get("publicUrl") if isinstance(public, dict) else (public or "")
+
+
+def download_receipt_bytes(file_path: str) -> bytes:
+    """Download raw bytes of a receipt file from Supabase Storage."""
+    return _sb.storage.from_("Receipts").download(file_path)
+
+
+def get_receipt_download_url(file_path: str) -> str:
+    """Return a download-forced public URL for a receipt."""
+    try:
+        public = _sb.storage.from_("Receipts").get_public_url(
+            file_path, {"download": True})
+        return public.get("publicUrl") if isinstance(public, dict) else (public or "")
+    except Exception:
+        # fallback: plain public URL works for download too
+        return get_receipt_public_url(file_path)
+
+
+def delete_receipt(receipt_id: int) -> None:
+    """Delete receipt row and its file from Supabase Storage."""
+    res = _sb.table("wallet_receipts").select("file_url").eq("id", receipt_id).limit(1).execute()
+    if res.data:
+        file_path = res.data[0].get("file_url") or ""
+        if file_path:
+            try:
+                _sb.storage.from_("Receipts").remove([file_path])
+            except Exception:
+                pass
+    _sb.table("wallet_receipts").delete().eq("id", receipt_id).execute()
 
 
 def get_wallet_reports(org_id: int, wallet_id: int) -> list:
     return _sb.table("financial_reports").select("*").eq("organization_id", org_id).eq("wallet_id", wallet_id).order("created_at", desc=True).execute().data or []
+
+
+def get_wallet_archives(org_id: int, wallet_id: int, budget_id: int) -> list:
+    """Return financial_report_archives for this specific wallet month (budget_id)."""
+    return (_sb.table("financial_report_archives")
+              .select("*")
+              .eq("organization_id", org_id)
+              .eq("wallet_id", wallet_id)
+              .eq("budget_id", budget_id)
+              .order("created_at", desc=True)
+              .execute().data or [])
 
 
 def get_wallet_budget(wallet_id: int, year: int, month: int) -> float:
@@ -241,28 +318,58 @@ def add_financial_report(org_id: int, wallet_id: int, budget_id: int,
                          budget: float, total_income: float, total_expense: float,
                          reimbursement: float, prev_fund: float,
                          budget_in_bank: float) -> dict:
+    # resolve report_month from wallet_budgets → months.month_name
+    # (OSAS view queries financial_reports.report_month to find the record)
+    report_month_value = None
+    try:
+        wb = _sb.table("wallet_budgets") \
+            .select("months(month_name)").eq("id", budget_id).single().execute()
+        if wb.data and wb.data.get("months"):
+            report_month_value = (wb.data["months"].get("month_name") or "").lower()
+    except Exception:
+        pass
+
     payload = {
-        "organization_id":   org_id,
-        "wallet_id":         wallet_id,
-        "budget_id":         budget_id,
-        "event_name":        event_name,
-        "date_prepared":     date_prepared,
-        "report_no":         report_no or None,
-        "budget":            budget,
-        "total_income":      total_income,
-        "total_expense":     total_expense,
-        "reimbursement":     reimbursement,
-        "previous_fund":     prev_fund,
+        "organization_id":    org_id,
+        "wallet_id":          wallet_id,
+        "budget_id":          budget_id,
+        "event_name":         event_name,
+        "date_prepared":      date_prepared,
+        "report_no":          report_no or None,
+        "budget":             budget,
+        "total_income":       total_income,
+        "total_expense":      total_expense,
+        "reimbursement":      reimbursement,
+        "previous_fund":      prev_fund,
         "budget_in_the_bank": budget_in_bank,
-        "status":            "Pending Review",
-        "notes":             None,
-        "checklist":         {},
+        "status":             "Pending Review",
+        "notes":              None,
+        "checklist":          {},
+        "report_month":       report_month_value,   # ← required by OSAS view
     }
-    res = _sb.table("financial_reports").insert(payload).execute()
+
+    # upsert: update if a row already exists for this wallet+budget, else insert
+    existing = _sb.table("financial_reports").select("id") \
+        .eq("organization_id", org_id) \
+        .eq("wallet_id", wallet_id) \
+        .eq("budget_id", budget_id) \
+        .eq("status", "Pending Review") \
+        .limit(1).execute()
+
+    if existing.data:
+        rep_id = existing.data[0]["id"]
+        _sb.table("financial_reports").update(payload).eq("id", rep_id).execute()
+        res = _sb.table("financial_reports").select("*").eq("id", rep_id).execute()
+    else:
+        res = _sb.table("financial_reports").insert(payload).execute()
+
     return res.data[0] if res.data else {}
 
 
 def get_latest_report(org_id: int, wallet_id: int, budget_id: int) -> dict:
+    """Return the most recent financial report for this specific wallet month (budget_id)."""
+    if not budget_id:
+        return {}
     res = _sb.table("financial_reports").select("*") \
         .eq("organization_id", org_id) \
         .eq("wallet_id", wallet_id) \
@@ -280,18 +387,251 @@ def get_profile(org_id: int) -> dict:
     dept_name = dept[0]["dept_name"] if dept else ""
     profile_row = _sb.table("profile_users").select("*").eq("organization_id", org_id).execute().data
     profile = profile_row[0] if profile_row else {}
+
+    # resolve storage path → public URL (same as web's get_profile)
+    photo_url = ""
+    raw_path = profile.get("profile_photo_url") or ""
+    if raw_path:
+        try:
+            bucket = "profile-photos"
+            public = _sb.storage.from_(bucket).get_public_url(raw_path)
+            photo_url = public.get("publicUrl") if isinstance(public, dict) else (public or "")
+        except Exception:
+            photo_url = raw_path  # fallback: keep raw path
+
     return {
-        "org_name":          org.get("org_name", ""),
-        "org_short_name":    profile.get("org_short_name") or "",
-        "department":        dept_name,
-        "school":            profile.get("school_name") or "Laguna State Polytechnic University, Sta. Cruz, Laguna (LSPU-SCC)",
-        "email":             profile.get("email") or "",
+        "org_name":           org.get("org_name", ""),
+        "org_short_name":     profile.get("org_short_name") or "",
+        "department":         dept_name,
+        "school":             profile.get("school_name") or "Laguna State Polytechnic University, Sta. Cruz, Laguna (LSPU-SCC)",
+        "email":              profile.get("email") or "",
         "accreditation_date": org.get("accreditation_date", ""),
-        "status":            org.get("status", ""),
-        "profile_photo_url": profile.get("profile_photo_url") or "",
+        "status":             org.get("status", ""),
+        "profile_photo_url":  photo_url,
     }
 
 
 def get_officers(org_id: int) -> list:
-    res = _sb.table("profile_officers").select("*").eq("organization_id", org_id).order("created_at").execute()
+    res = _sb.table("profile_officers").select("*").eq("organization_id", org_id).order("term_start").execute()
     return res.data or []
+
+
+def update_profile(org_id: int, org_short_name: str = None, email: str = None) -> dict:
+    """Update editable profile fields in profile_users. Returns updated row or raises."""
+    prof_update = {}
+    if org_short_name is not None:
+        prof_update["org_short_name"] = org_short_name
+    if email is not None:
+        prof_update["email"] = email
+
+    if not prof_update:
+        return {}
+
+    existing = _sb.table("profile_users").select("id").eq("organization_id", org_id).limit(1).execute()
+    if existing.data:
+        res = _sb.table("profile_users").update(prof_update).eq("organization_id", org_id).execute()
+    else:
+        prof_update["organization_id"] = org_id
+        prof_update.setdefault("school_name", "Laguna State Polytechnic University, Sta. Cruz, Laguna (LSPU-SCC)")
+        res = _sb.table("profile_users").insert(prof_update).execute()
+
+    return res.data[0] if res.data else {}
+
+
+def update_profile_photo(org_id: int, image_bytes: bytes, ext: str) -> str:
+    """Upload photo to Supabase Storage and update profile_users. Returns public URL."""
+    from uuid import uuid4
+    bucket = "profile-photos"
+    path = f"orgs/{org_id}/org-{org_id}-{uuid4()}.{ext}"
+    _sb.storage.from_(bucket).upload(path, image_bytes)
+
+    existing = _sb.table("profile_users").select("id").eq("organization_id", org_id).limit(1).execute()
+    if existing.data:
+        _sb.table("profile_users").update({"profile_photo_url": path}).eq("organization_id", org_id).execute()
+    else:
+        _sb.table("profile_users").insert({
+            "organization_id": org_id,
+            "profile_photo_url": path,
+        }).execute()
+
+    public = _sb.storage.from_(bucket).get_public_url(path)
+    return public.get("publicUrl") if isinstance(public, dict) else public
+
+
+def create_officer(org_id: int, name: str, position: str,
+                   term_start: str, term_end: str, status: str) -> dict:
+    payload = {
+        "organization_id": org_id,
+        "name":       name,
+        "position":   position,
+        "term_start": term_start or None,
+        "term_end":   term_end or None,
+        "status":     status or "active",
+    }
+    res = _sb.table("profile_officers").insert(payload).execute()
+    return res.data[0] if res.data else {}
+
+
+def update_officer(officer_id: int, org_id: int, name: str, position: str,
+                   term_start: str, term_end: str, status: str) -> dict:
+    payload = {k: v for k, v in {
+        "name":       name,
+        "position":   position,
+        "term_start": term_start or None,
+        "term_end":   term_end or None,
+        "status":     status,
+    }.items() if v is not None}
+    res = (_sb.table("profile_officers")
+             .update(payload)
+             .eq("id", officer_id)
+             .eq("organization_id", org_id)
+             .execute())
+    return res.data[0] if res.data else {}
+
+
+def delete_officer(officer_id: int, org_id: int) -> None:
+    _sb.table("profile_officers").delete().eq("id", officer_id).eq("organization_id", org_id).execute()
+
+
+def submit_report(org_id: int, wallet_id: int, budget_id: int) -> dict:
+    """
+    Mirror of web's POST /reports/<wallet_id>/submit.
+    1. Marks the financial_report as Submitted
+    2. Creates archive snapshot (summary + transactions + receipts)
+    3. Sends OSAS notification
+    4. Updates OSAS checklist/status
+    Returns the archive row.
+    """
+    from datetime import datetime as _dt
+
+    # find the pending report for this wallet+budget
+    rep_res = _sb.table("financial_reports").select("*") \
+        .eq("organization_id", org_id) \
+        .eq("wallet_id", wallet_id) \
+        .eq("budget_id", budget_id) \
+        .eq("status", "Pending Review") \
+        .order("created_at", desc=True).limit(1).execute()
+
+    if not rep_res.data:
+        raise ValueError("No pending report found for this wallet month.")
+
+    rep    = rep_res.data[0]
+    rep_id = rep["id"]
+
+    # 1. mark as Submitted
+    _sb.table("financial_reports").update({
+        "status":          "Submitted",
+        "submission_date": _dt.utcnow().date().isoformat(),
+        "updated_at":      _dt.utcnow().isoformat(),
+    }).eq("id", rep_id).execute()
+
+    # 2. compute remaining
+    budget_val    = float(rep.get("budget") or 0)
+    total_expense = float(rep.get("total_expense") or 0)
+    reimb         = float(rep.get("reimbursement") or 0)
+    prev_fund     = float(rep.get("previous_fund") or 0)
+    remaining     = budget_val - total_expense - reimb + prev_fund
+
+    # 3. insert archive summary
+    arch_ins = _sb.table("financial_report_archives").insert({
+        "organization_id": org_id,
+        "wallet_id":       wallet_id,
+        "budget_id":       budget_id,
+        "report_id":       rep_id,
+        "report_no":       rep.get("report_no"),
+        "event_name":      rep.get("event_name"),
+        "date_prepared":   rep.get("date_prepared"),
+        "budget":          budget_val,
+        "total_expense":   total_expense,
+        "reimbursement":   reimb,
+        "previous_fund":   prev_fund,
+        "remaining":       remaining,
+        "file_url":        None,
+    }).execute()
+    archive_id = arch_ins.data[0]["id"]
+
+    # 4. archive transactions
+    tx_res = _sb.table("wallet_transactions") \
+        .select("date_issued,quantity,particulars,description,price,kind") \
+        .eq("wallet_id", wallet_id).eq("budget_id", budget_id).execute()
+    txs = tx_res.data or []
+    if txs:
+        _sb.table("financial_report_archive_transactions").insert([{
+            "archive_id":  archive_id,
+            "date_issued": tx["date_issued"],
+            "quantity":    tx["quantity"],
+            "particulars": tx.get("particulars"),
+            "description": tx["description"],
+            "price":       float(tx["price"]),
+            "kind":        tx["kind"],
+        } for tx in txs]).execute()
+
+    # 5. archive receipts
+    rc_res = _sb.table("wallet_receipts") \
+        .select("description,receipt_date,file_url") \
+        .eq("wallet_id", wallet_id).eq("budget_id", budget_id).execute()
+    receipts = rc_res.data or []
+    if receipts:
+        _sb.table("financial_report_archive_receipts").insert([{
+            "archive_id":   archive_id,
+            "description":  r["description"],
+            "receipt_date": r["receipt_date"],
+            "file_url":     r["file_url"],
+        } for r in receipts]).execute()
+
+    # 6. OSAS notification (best-effort — never crash submit on failure)
+    try:
+        org_res = _sb.table("organizations").select("org_name") \
+            .eq("id", org_id).limit(1).execute()
+        org_name = org_res.data[0]["org_name"] if org_res.data else "Organization"
+
+        # get month name for the notification message
+        wb_res = _sb.table("wallet_budgets") \
+            .select("months(month_name)").eq("id", budget_id).limit(1).execute()
+        month_label = ""
+        if wb_res.data and wb_res.data[0].get("months"):
+            month_label = (wb_res.data[0]["months"].get("month_name") or "").title()
+
+        message = (f'has a report "Pending Review for {month_label}"'
+                   if month_label else 'has a report "Pending Review"')
+
+        _sb.table("osas_notifications").insert({
+            "org_id":    org_id,
+            "report_id": rep_id,
+            "org_name":  org_name,
+            "message":   message,
+        }).execute()
+    except Exception:
+        pass
+
+    # 7. update OSAS checklist/status (best-effort)
+    try:
+        wb_res2 = _sb.table("wallet_budgets") \
+            .select("months(month_name)").eq("id", budget_id).single().execute()
+        if wb_res2.data and wb_res2.data.get("months"):
+            month_key = (wb_res2.data["months"].get("month_name") or "").lower()
+            fr_res = _sb.table("financial_reports").select("*") \
+                .eq("organization_id", org_id) \
+                .is_("wallet_id", None).is_("budget_id", None) \
+                .limit(1).execute()
+            if fr_res.data:
+                master = fr_res.data[0]
+                checklist = master.get("checklist") or {}
+                month_keys = ["august","september","october","november","december",
+                              "january","february","march","april","may"]
+                if month_key in month_keys:
+                    checklist[month_key] = True
+                received = sum(1 for k in month_keys if checklist.get(k))
+                total    = len(month_keys)
+                new_status = ("Completed" if received == total
+                              else "In Review" if received > 0
+                              else "Pending Review")
+                _sb.table("financial_reports").update({
+                    "checklist":  checklist,
+                    "status":     new_status,
+                    "updated_at": _dt.utcnow().isoformat(),
+                }).eq("id", master["id"]).execute()
+    except Exception:
+        pass
+
+    return arch_ins.data[0]

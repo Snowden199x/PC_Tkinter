@@ -10,7 +10,16 @@ from db import (get_wallets, get_wallet_transactions,
                 get_wallet_receipts, get_wallet_reports, get_wallet_budget,
                 add_wallet_transaction, update_wallet_transaction,
                 delete_wallet_transaction, upsert_wallet_budget,
-                add_financial_report, get_latest_report)
+                add_financial_report, get_latest_report,
+                add_wallet_receipt, get_receipt_public_url,
+                get_receipt_download_url, delete_receipt,
+                download_receipt_bytes, submit_report,
+                get_wallet_archives)
+import db as _db_module
+
+def _sb_client():
+    """Return the shared Supabase client from db.py."""
+    return _db_module._sb
 
 _ASSETS      = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "assets", "images")
 _CARD_COLORS = ["#F3D58D","#D4E8C2","#C2D4E8","#E8C2D4","#D4C2E8","#C2E8D4","#E8D4C2"]
@@ -62,6 +71,75 @@ class WalletScreen(tk.Frame):
         self._view  = "list"          # "list" | "detail"
         self._wallet = None           # selected wallet dict
         self._build()
+
+    # ── Shared pill-button factory (same smooth rounding as sidebar) ──
+    def _make_pill_btn(self, parent, text, bg_hex, hover_hex,
+                       fg="white", width=None, height=36,
+                       font_spec=None, side=None, padx=0, pady=0,
+                       command=None):
+        """
+        Returns a tk.Canvas that looks like a fully-rounded pill button,
+        drawn with PIL at 4× scale for smooth anti-aliased edges —
+        identical technique to the sidebar nav pills.
+        """
+        from PIL import Image, ImageDraw as _ID
+
+        fnt = font_spec or font(9, "bold")
+        cv = tk.Canvas(parent, bd=0, highlightthickness=0,
+                       bg=parent.cget("bg"), cursor="hand2",
+                       height=height)
+        if width:
+            cv.config(width=width)
+        if side is not None:
+            cv.pack(side=side, padx=padx, pady=pady)
+        else:
+            cv.pack(padx=padx, pady=pady)
+
+        def _draw(hover=False):
+            cv.delete("all")
+            bw = cv.winfo_width() or (width or 80)
+            bh = cv.winfo_height() or height
+            if bw < 4 or bh < 4:
+                return
+            # use _active_bg if set (for filter button active state), else normal
+            active_bg = getattr(cv, "_active_bg", None)
+            active_fg = getattr(cv, "_active_fg", None)
+            is_active = active_bg is not None
+            colour    = active_bg if is_active else (hover_hex if hover else bg_hex)
+            txt_colour = active_fg if is_active else fg
+            scale = 4
+            sw, sh = bw * scale, bh * scale
+            r = (sh // 2)          # fully rounded — same as sidebar
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            cr = int(colour.lstrip("#"), 16)
+            rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            # inactive (not active, not hover): draw outline border only
+            if not is_active and not hover:
+                # border colour from _FILTER_BDR (#ECDDC6)
+                bdr_hex = _FILTER_BDR.lstrip("#")
+                bdr_rgb = (int(bdr_hex[0:2],16), int(bdr_hex[2:4],16), int(bdr_hex[4:6],16))
+                _ID.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=rgb + (255,),
+                    outline=bdr_rgb + (255,), width=6)
+            else:
+                _ID.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=rgb + (255,))
+            img = img.resize((bw, bh), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            cv._ph = ph
+            cv.create_image(0, 0, anchor="nw", image=ph)
+            cv.create_text(bw // 2, bh // 2, text=text,
+                           fill=txt_colour, font=fnt, anchor="center")
+
+        cv._redraw = _draw   # expose so _update_flt_styles can call it
+        cv.bind("<Configure>", lambda e: _draw())
+        cv.bind("<Enter>",     lambda e: _draw(hover=True))
+        cv.bind("<Leave>",     lambda e: _draw(hover=False))
+        if command:
+            cv.bind("<Button-1>", lambda e: command())
+        return cv
 
     # ── outer scaffold ────────────────────────────────────────────────
     def _build(self):
@@ -295,32 +373,67 @@ class WalletScreen(tk.Frame):
         tk.Label(hdr, text=month_title, bg=BG_WHITE, fg=TEXT_DARK,
                  font=("Georgia", 16, "italic")).pack(side="left", padx=(8, 0))
 
-        # —— Add budget secondary button (right side) ——
+        # —— Add budget secondary button (right side) — rounded pill ——
         try:
             _cur_budget = get_wallet_budget(wallet["id"], wallet.get("year"), wallet.get("month_id"))
         except Exception:
             _cur_budget = 0.0
-        _budget_text = f"Budget: Php {_cur_budget:,.2f}" if _cur_budget else "Add budget for this month"
-        budget_btn = tk.Label(hdr, text=_budget_text,
-                              bg=BG_WHITE, fg="#616161",
-                              font=font(8), padx=12, pady=7,
-                              cursor="hand2",
-                              highlightbackground=_FILTER_BDR,
-                              highlightthickness=1)
-        budget_btn.pack(side="right", padx=(6, 0))
-        budget_btn.bind("<Enter>", lambda e: budget_btn.config(bg="#F5F1E8"))
-        budget_btn.bind("<Leave>", lambda e: budget_btn.config(bg=BG_WHITE))
-        budget_btn.bind("<Button-1>", lambda e: self._open_budget_dialog(budget_btn))
+
+        _budget_text_ref = [f"Budget: Php {_cur_budget:,.2f}" if _cur_budget else "Add budget for this month"]
+
+        from PIL import Image, ImageDraw as _ID2
+
+        budget_cv = tk.Canvas(hdr, bd=0, highlightthickness=0,
+                              bg=BG_WHITE, cursor="hand2", height=30)
+        budget_cv.pack(side="right", padx=(6, 0))
+
+        def _draw_budget_btn(hover=False):
+            budget_cv.delete("all")
+            # measure text width to size the canvas dynamically
+            import tkinter.font as tkfont
+            fnt_obj = tkfont.Font(family="TkDefaultFont", size=8)
+            txt_w = fnt_obj.measure(_budget_text_ref[0])
+            bw = txt_w + 28          # 14px padding each side
+            bh = 30
+            budget_cv.config(width=bw)
+            scale = 4
+            sw, sh = bw * scale, bh * scale
+            r = sh // 2              # fully rounded pill
+            fill_hex = "#F5F1E8" if hover else BG_WHITE
+            cr = int(fill_hex.lstrip("#"), 16)
+            fill_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            bdr_hex = _FILTER_BDR.lstrip("#")
+            bdr_rgb = (int(bdr_hex[0:2],16), int(bdr_hex[2:4],16), int(bdr_hex[4:6],16))
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            _ID2.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1], radius=r,
+                fill=fill_rgb + (255,),
+                outline=bdr_rgb + (255,), width=6)
+            img = img.resize((bw, bh), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            budget_cv._ph = ph
+            budget_cv.create_image(0, 0, anchor="nw", image=ph)
+            budget_cv.create_text(bw // 2, bh // 2,
+                                  text=_budget_text_ref[0],
+                                  fill="#616161", font=font(8), anchor="center")
+
+        budget_cv.bind("<Configure>", lambda e: _draw_budget_btn())
+        budget_cv.bind("<Enter>",     lambda e: _draw_budget_btn(hover=True))
+        budget_cv.bind("<Leave>",     lambda e: _draw_budget_btn(hover=False))
+        budget_cv.bind("<Button-1>",  lambda e: self._open_budget_dialog(
+            budget_cv, _budget_text_ref, _draw_budget_btn))
+        budget_cv.after(10, _draw_budget_btn)
 
         # —— + Add button with dropdown ——
         add_wrap = tk.Frame(hdr, bg=BG_WHITE)
         add_wrap.pack(side="right", padx=(0, 6))
 
-        add_btn = tk.Label(add_wrap, text="+ Add", bg=_BTN_BROWN, fg="white",
-                           font=font(9, "bold"), padx=14, pady=7, cursor="hand2")
+        add_btn = self._make_pill_btn(
+            add_wrap, "+ Add",
+            bg_hex=_BTN_BROWN, hover_hex=_BTN_HOV,
+            fg="white", width=80, height=34,
+            font_spec=font(9, "bold"))
         add_btn.pack()
-        add_btn.bind("<Enter>", lambda e: add_btn.config(bg=_BTN_HOV))
-        add_btn.bind("<Leave>", lambda e: add_btn.config(bg=_BTN_BROWN))
 
         # dropdown
         drop = tk.Frame(self._box, bg="white",
@@ -328,16 +441,22 @@ class WalletScreen(tk.Frame):
         drop._open = False
 
         for txt, kind in [("Add income transaction", "income"),
-                          ("Add expense transaction", "expense")]:
+                          ("Add expense transaction", "expense"),
+                          ("Add receipt", "receipt")]:
             item = tk.Label(drop, text=txt, bg="white", fg=TEXT_DARK,
                             font=font(9), padx=16, pady=8, anchor="w",
                             cursor="hand2")
             item.pack(fill="x")
             item.bind("<Enter>", lambda e, b=item: b.config(bg="#F5F1E8"))
             item.bind("<Leave>", lambda e, b=item: b.config(bg="white"))
-            item.bind("<Button-1>",
-                      lambda e, k=kind: (self._close_drop(drop),
-                                         self._open_tx_dialog(k)))
+            if kind == "receipt":
+                item.bind("<Button-1>",
+                          lambda e: (self._close_drop(drop),
+                                     self._open_receipt_dialog()))
+            else:
+                item.bind("<Button-1>",
+                          lambda e, k=kind: (self._close_drop(drop),
+                                             self._open_tx_dialog(k)))
 
         def _toggle(e=None):
             if drop._open:
@@ -603,7 +722,7 @@ class WalletScreen(tk.Frame):
 
         save_btn.bind("<Button-1>", _save)
 
-    def _open_budget_dialog(self, budget_btn=None):
+    def _open_budget_dialog(self, budget_btn=None, budget_text_ref=None, redraw_fn=None):
         """Modal to set/update the budget for this wallet month."""
         wallet = self._wallet
         root = self.winfo_toplevel()
@@ -698,8 +817,10 @@ class WalletScreen(tk.Frame):
                 err_lbl.config(text="Amount cannot be negative."); return
             try:
                 upsert_wallet_budget(wallet["budget_id"], amount)
-                if budget_btn is not None:
-                    budget_btn.config(text=f"Budget: Php {amount:,.2f}")
+                if budget_text_ref is not None:
+                    budget_text_ref[0] = f"Budget: Php {amount:,.2f}"
+                if redraw_fn is not None:
+                    redraw_fn()
                 overlay.destroy()
             except Exception as err:
                 err_lbl.config(text=f"Failed to save: {err}")
@@ -962,16 +1083,104 @@ class WalletScreen(tk.Frame):
 
         yes_btn.bind("<Button-1>", _confirm)
 
-    def _show_report_action_buttons(self, banner_canvas):
-        """Replace Generate button with Edit/Preview/Print/Submit buttons."""
-        # remove old generate button
+    def _show_report_action_buttons(self, banner_canvas, already_submitted=False):
+        """Replace Generate button with Edit/Preview/Print/Submit buttons.
+        If already_submitted=True, remove all four buttons and show a single
+        hollow disabled 'Generate report' button — same pill as the original
+        but greyed out and not clickable."""
         banner_canvas.delete("btn")
+        # also remove any leftover individual action button windows
+        for tag in ("btn_edit", "btn_preview", "btn_print", "btn_submit"):
+            banner_canvas.delete(tag)
 
-        _btn_bg   = BG_WHITE
-        _btn_bdr  = _FILTER_BDR
-        _btn_h    = 36
+        _btn_h = 36
 
-        def _make_action_btn(text, tag):
+        if already_submitted:
+            # ── Hollow disabled "Generate report" pill ────────────────
+            _rep_ico = _img("reports.png", 14, 14, self._imgs)
+            dis_cv = tk.Canvas(banner_canvas, bd=0, highlightthickness=0,
+                               bg="#ECB95D", cursor="arrow")
+            banner_canvas.create_window(0, 0, anchor="e", window=dis_cv, tags="btn")
+
+            def _draw_disabled():
+                dis_cv.delete("all")
+                bw = dis_cv.winfo_width()
+                bh = dis_cv.winfo_height()
+                if bw < 4 or bh < 4:
+                    return
+                from PIL import Image, ImageDraw
+                scale = 4
+                sw, sh = bw * scale, bh * scale
+                r = min(sh // 2, 20 * scale)
+                # white fill at ~40% opacity blended over the gradient bg colour
+                # get current bg colour of the canvas to blend against
+                try:
+                    bg_hex = dis_cv.cget("bg").lstrip("#")
+                    br = int(bg_hex[0:2], 16)
+                    bg_ = int(bg_hex[2:4], 16)
+                    bb  = int(bg_hex[4:6], 16)
+                except Exception:
+                    br, bg_, bb = 0xEC, 0xB9, 0x5D   # fallback mid-gradient
+                alpha = 0.65   # 65% white over gradient
+                fr = int(255 * alpha + br * (1 - alpha))
+                fg_ = int(255 * alpha + bg_ * (1 - alpha))
+                fb  = int(255 * alpha + bb * (1 - alpha))
+                img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+                ImageDraw.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=(fr, fg_, fb, 255),
+                    outline=(200, 190, 175, 255), width=8)
+                img = img.resize((bw, bh), Image.LANCZOS)
+                ph = ImageTk.PhotoImage(img)
+                dis_cv._ph = ph
+                dis_cv.create_image(0, 0, anchor="nw", image=ph)
+                x = 12
+                if _rep_ico:
+                    dis_cv.create_image(x + 7, bh // 2, anchor="w",
+                                        image=_rep_ico)
+                    x += 26
+                dis_cv.create_text(x, bh // 2, anchor="w",
+                                   text="Generate report",
+                                   fill="#AAAAAA", font=font(9, "bold"))
+
+            _btn_w, _btn_h2 = 168, 36
+            dis_cv.config(width=_btn_w, height=_btn_h2)
+            dis_cv.bind("<Configure>", lambda e: _draw_disabled())
+
+            def _layout_disabled(event=None):
+                bw = banner_canvas.winfo_width()
+                bh = banner_canvas.winfo_height()
+                if bw < 2 or bh < 2:
+                    return
+                banner_canvas.coords("btn", bw - 20, bh // 2)
+                # match gradient bg at button position
+                c1, c2, c3 = (0xF3, 0xD5, 0x8D), (0xEC, 0xB9, 0x5D), (0xE5, 0x9E, 0x2C)
+                t = max(0.0, min(1.0, (bw - _btn_w / 2) / bw)) if bw > 0 else 0.9
+                if t <= 0.54:
+                    s = t / 0.54
+                    bc = tuple(int(c1[i] + (c2[i] - c1[i]) * s) for i in range(3))
+                else:
+                    s = (t - 0.54) / 0.46
+                    bc = tuple(int(c2[i] + (c3[i] - c2[i]) * s) for i in range(3))
+                dis_cv.config(bg="#{:02x}{:02x}{:02x}".format(*bc))
+
+            banner_canvas.bind("<Configure>",
+                lambda e, orig=banner_canvas.bind("<Configure>"): (
+                    orig(e) if callable(orig) else None,
+                    _layout_disabled()
+                ))
+            banner_canvas.after(50, _layout_disabled)
+            return
+
+        # ── Active: four action buttons ───────────────────────────────
+        # pre-load icons at the same size as the Generate button icon (14×14)
+        _ico_preview = _img("preview.png", 14, 14, self._imgs)
+        _ico_print   = _img("print.png",   14, 14, self._imgs)
+        _ico_submit  = _img("submit.png",  14, 14, self._imgs)
+
+        def _make_action_btn(text, tag, icon=None,
+                             fill_rgb=(255,255,255), hover_rgb=(236,220,198),
+                             txt_clr=TEXT_DARK):
             cv = tk.Canvas(banner_canvas, bd=0, highlightthickness=0,
                            bg="#ECB95D", cursor="hand2",
                            width=90, height=_btn_h)
@@ -985,32 +1194,48 @@ class WalletScreen(tk.Frame):
                 scale = 4
                 sw, sh = bw * scale, bh * scale
                 r = min(sh // 2, 20 * scale)
-                fill = (236, 220, 198, 255) if hover else (255, 255, 255, 255)
+                fill    = hover_rgb + (255,) if hover else fill_rgb + (255,)
+                outline = (236, 220, 198, 255)
                 img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
                 ImageDraw.Draw(img).rounded_rectangle(
                     [0, 0, sw-1, sh-1], radius=r,
-                    fill=fill, outline=(236, 220, 198, 255), width=6)
+                    fill=fill, outline=outline, width=6)
                 img = img.resize((bw, bh), Image.LANCZOS)
                 ph = ImageTk.PhotoImage(img)
                 cv._ph = ph
                 cv.create_image(0, 0, anchor="nw", image=ph)
-                cv.create_text(bw // 2, bh // 2, text=text,
-                               fill=TEXT_DARK, font=font(8, "bold"), anchor="center")
+                # icon + text layout — same spacing as Generate button
+                x = 12
+                if icon:
+                    cv.create_image(x + 7, bh // 2, anchor="w", image=icon)
+                    x += 26
+                cv.create_text(x, bh // 2, anchor="w",
+                               text=text, fill=txt_clr, font=font(8, "bold"))
 
             cv.bind("<Configure>", lambda e: _draw())
             cv.bind("<Enter>",     lambda e: _draw(hover=True))
             cv.bind("<Leave>",     lambda e: _draw(hover=False))
             return cv
 
+        # colours from wallets.css:
+        #   preview → white / #ecddc6 hover  (default)
+        #   print   → #a24a00 / #8b3a00 hover, white text
+        #   submit  → #2e7d32 / #1b5e20 hover, white text
         edit_btn    = _make_action_btn("Edit Report", "btn_edit")
-        preview_btn = _make_action_btn("Preview",    "btn_preview")
-        print_btn   = _make_action_btn("Print",      "btn_print")
-        submit_btn  = _make_action_btn("Submit",     "btn_submit")
+        preview_btn = _make_action_btn("Preview",     "btn_preview", icon=_ico_preview)
+        print_btn   = _make_action_btn("Print",       "btn_print",   icon=_ico_print,
+                                       fill_rgb=(162, 74, 0),
+                                       hover_rgb=(139, 58, 0),
+                                       txt_clr="white")
+        submit_btn  = _make_action_btn("Submit",      "btn_submit",  icon=_ico_submit,
+                                       fill_rgb=(46, 125, 50),
+                                       hover_rgb=(27, 94, 32),
+                                       txt_clr="white")
 
-        # click bindings
         edit_btn.bind("<Button-1>",    lambda e: self._open_report_dialog())
         preview_btn.bind("<Button-1>", lambda e: self._download_report_docx())
-
+        print_btn.bind("<Button-1>",   lambda e: self._print_report())
+        submit_btn.bind("<Button-1>",  lambda e: self._confirm_submit_report(banner_canvas))
 
         def _layout_action_btns(event=None):
             bw = banner_canvas.winfo_width()
@@ -1020,12 +1245,10 @@ class WalletScreen(tk.Frame):
             cy  = bh // 2
             gap = 6
             bw_ = 90
-            # position right to left: submit, print, preview, edit
             x = bw - 20
             for tag in ("btn_submit", "btn_print", "btn_preview", "btn_edit"):
                 banner_canvas.coords(tag, x, cy)
                 x -= bw_ + gap
-            # update each canvas bg to match gradient at its position
             c1, c2, c3 = (0xF3, 0xD5, 0x8D), (0xEC, 0xB9, 0x5D), (0xE5, 0x9E, 0x2C)
             for cv_widget, x_pos in [
                 (edit_btn,    bw - 20 - 3*(bw_+gap) - bw_//2),
@@ -1182,6 +1405,54 @@ class WalletScreen(tk.Frame):
                 pc.text    = f"PHP {float(tx.get('price',0)):,.2f}"
             summary_row_inc.cells[-1].text = f"PHP {total_income:,.2f}"
 
+        # ── Receipts appendix — same as web preview route ─────────────
+        # Fetch receipts scoped to this wallet month (wallet_id + budget_id)
+        try:
+            receipts = get_wallet_receipts(
+                wallet["id"], budget_id=wallet.get("budget_id"))
+        except Exception:
+            receipts = []
+
+        if receipts:
+            from docx.shared import Inches
+            from io import BytesIO as _BytesIO
+
+            # "APPENDIX: RECEIPTS" heading — matches web preview route
+            title_p = doc.add_paragraph()
+            title_run = title_p.add_run("APPENDIX: RECEIPTS")
+            title_run.bold = True
+
+            for r in receipts:
+                file_path = r.get("file_url") or ""
+                if not file_path:
+                    continue
+
+                # download image bytes from Supabase Storage
+                try:
+                    file_bytes = download_receipt_bytes(file_path)
+                except Exception:
+                    continue   # skip if file missing or not accessible
+
+                # caption: "YYYY-MM-DD - Description"  (centered, same as web)
+                cap_p = doc.add_paragraph()
+                cap_p.alignment = 1
+                cap_p.add_run(
+                    f"{(r.get('receipt_date') or '')[:10]} - "
+                    f"{r.get('description') or ''}"
+                )
+
+                # embed image at 3 inches wide (same as web preview route)
+                try:
+                    img_stream = _BytesIO(file_bytes)
+                    doc.add_picture(img_stream, width=Inches(3))
+                    doc.paragraphs[-1].alignment = 1   # center the image paragraph
+                except Exception:
+                    pass   # PDF or unsupported format — skip silently
+
+                # small spacer between receipts
+                spacer = doc.add_paragraph()
+                spacer.alignment = 1
+
         # ask user where to save
         default_name = rep.get("report_no") or "financial_report"
         save_path = filedialog.asksaveasfilename(
@@ -1199,7 +1470,390 @@ class WalletScreen(tk.Frame):
         except Exception as e:
             messagebox.showerror("Error", f"Could not save: {e}")
 
-    def _delete_transaction(self, t):
+    def _print_report(self):
+        """
+        Build the same HTML as the web's print_report.html and open it in the
+        default browser.  The page has onload="window.print()" so the OS print
+        dialog fires automatically — identical behaviour to the web Print button.
+        """
+        import os as _os
+        import tempfile
+        import webbrowser
+        from tkinter import messagebox
+
+        wallet = self._wallet
+        try:
+            rep = get_latest_report(
+                self._org.get("id"), wallet["id"], wallet["budget_id"])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not fetch report: {e}")
+            return
+        if not rep:
+            messagebox.showwarning("No Report", "No report found for this wallet.")
+            return
+
+        # ── numeric fields ────────────────────────────────────────────
+        budget_val    = float(rep.get("budget") or 0)
+        total_income  = float(rep.get("total_income") or 0)
+        total_expense = float(rep.get("total_expense") or 0)
+        reimb         = float(rep.get("reimbursement") or 0)
+        prev_fund     = float(rep.get("previous_fund") or 0)
+        bank          = float(rep.get("budget_in_the_bank") or 0)
+        remaining     = budget_val - total_expense - reimb + prev_fund
+        month_label   = wallet.get("month_name", "").capitalize()
+        report_month  = f"{month_label} {wallet.get('year', '')}".upper()
+        org_name      = self._org.get("org_name", "")
+        college_name  = self._org.get("department", "").upper()
+
+        # ── transactions ──────────────────────────────────────────────
+        try:
+            txs     = get_wallet_transactions(wallet["id"], "expense",
+                                              budget_id=wallet.get("budget_id"))
+            incomes = get_wallet_transactions(wallet["id"], "income",
+                                              budget_id=wallet.get("budget_id"))
+        except Exception:
+            txs = incomes = []
+
+        # ── receipts with public URLs ─────────────────────────────────
+        try:
+            receipts_raw = get_wallet_receipts(
+                wallet["id"], budget_id=wallet.get("budget_id"))
+        except Exception:
+            receipts_raw = []
+
+        receipts = []
+        for r in receipts_raw:
+            fp = r.get("file_url") or ""
+            url = ""
+            if fp:
+                try:
+                    url = get_receipt_public_url(fp)
+                except Exception:
+                    url = ""
+            receipts.append({
+                "receipt_date": (r.get("receipt_date") or "")[:10],
+                "description":  r.get("description") or "",
+                "file_url":     url,
+            })
+
+        # ── load logos as base64 data URIs so they work in any temp path ──
+        import base64
+
+        def _img_b64(name):
+            path = _os.path.join(
+                _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                "assets", "images", name)
+            if not _os.path.exists(path):
+                return ""
+            with open(path, "rb") as f:
+                data = base64.b64encode(f.read()).decode("ascii")
+            ext = name.rsplit(".", 1)[-1].lower()
+            mime = "image/png" if ext == "png" else f"image/{ext}"
+            return f"data:{mime};base64,{data}"
+
+        logo1 = _img_b64("1.png")
+        logo2 = _img_b64("2.png")
+
+        logo1_tag = (f'<img src="{logo1}" class="header-logo" alt="Logo 1" />'
+                     if logo1 else "")
+        logo2_tag = (f'<img src="{logo2}" class="header-logo" alt="Logo 2" />'
+                     if logo2 else "")
+        def _expense_rows():
+            rows = ""
+            for tx in txs:
+                total = float(tx.get("price", 0)) * int(tx.get("quantity", 1))
+                rows += f"""
+                <tr>
+                  <td class="text-center">{tx.get('date_issued','')[:10]}</td>
+                  <td class="text-center">{tx.get('quantity','')}</td>
+                  <td class="text-center">{tx.get('particulars') or ''}</td>
+                  <td class="text-center">{tx.get('description') or ''}</td>
+                  <td class="text-right">PHP {total:,.2f}</td>
+                </tr>"""
+            return rows
+
+        def _income_rows():
+            rows = ""
+            for tx in incomes:
+                rows += f"""
+                <tr>
+                  <td class="text-center">{tx.get('date_issued','')[:10]}</td>
+                  <td class="text-center">{tx.get('quantity','')}</td>
+                  <td class="text-center">{tx.get('income_type') or ''}</td>
+                  <td class="text-center">{tx.get('description') or ''}</td>
+                  <td class="text-right">PHP {float(tx.get('price',0)):,.2f}</td>
+                </tr>"""
+            return rows
+
+        def _receipt_items():
+            if not receipts:
+                return ""
+            items = ""
+            for r in receipts:
+                img_tag = (f'<img src="{r["file_url"]}" alt="Receipt" '
+                           f'class="receipt-image" />'
+                           if r["file_url"] else "")
+                items += f"""
+                <div class="receipt-item">
+                  <div class="receipt-caption">
+                    {r['receipt_date']} - {r['description']}
+                  </div>
+                  {img_tag}
+                </div>"""
+            return items
+
+        appendix_section = ""
+        if receipts:
+            appendix_section = f"""
+            <div class="page-break"></div>
+            <div class="header-row">
+              <div class="header-cell left">{logo1_tag}</div>
+              <div class="header-cell center">
+                <p class="header-center-line">Republic of the Philippines</p>
+                <p class="header-center-line header-university">Laguna State Polytechnic University</p>
+                <p class="header-center-line">Province of Laguna</p>
+              </div>
+              <div class="header-cell right">{logo2_tag}</div>
+            </div>
+            <div class="appendix-title">APPENDIX A - RECEIPTS</div>
+            <div class="appendix-grid">
+              {_receipt_items()}
+            </div>"""
+
+        # ── assemble full HTML (mirrors print_report.html exactly) ────
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Activity Financial Statement</title>
+  <style>
+    :root {{ --font-main:"Times New Roman",serif; --blue-text:#0070c0; --gray-header:#d9d9d9; }}
+    * {{ box-sizing:border-box; }}
+    body {{ font-family:var(--font-main); font-size:11pt; color:#000; margin:0; padding:0; }}
+    @page {{ size:A4; margin:20mm; }}
+    .page {{ width:100%; }}
+    .header-row {{ display:table; width:100%; margin-top:6mm; margin-bottom:4pt; }}
+    .header-cell {{ display:table-cell; vertical-align:middle; }}
+    .header-cell.left,.header-cell.right {{ width:20%; text-align:center; }}
+    .header-cell.center {{ width:60%; text-align:center; font-size:11pt; line-height:1.15; }}
+    .header-logo {{ width:70px; height:70px; object-fit:contain; }}
+    .header-center-line {{ margin:0; }}
+    .header-university {{ font-weight:normal; font-family:"Old English Text MT","Times New Roman",serif; font-size:14pt; }}
+    .org-title {{ text-align:center; margin-top:6pt; margin-bottom:2pt; }}
+    .org-title .dept-name {{ font-weight:bold; color:#000; display:block; }}
+    .org-title .org-name {{ font-weight:bold; color:var(--blue-text); display:block; }}
+    .statement-title {{ text-align:center; font-weight:bold; margin:4pt 0; background:#bfbfbf; padding:2px 0; }}
+    table {{ width:100%; border-collapse:collapse; font-size:10pt; }}
+    th,td {{ border:1px solid #000; padding:2px 4px; vertical-align:middle; }}
+    th {{ background:var(--gray-header); text-align:center; font-weight:bold; }}
+    .section-label-cell {{ width:30%; font-weight:bold; }}
+    .section-value-cell {{ width:70%; text-align:center; }}
+    .section-heading {{ background:var(--gray-header); font-weight:bold; text-align:center; }}
+    .summary-table {{ margin-top:4pt; }}
+    .summary-table td:first-child {{ width:55%; }}
+    .summary-table td:last-child {{ width:45%; text-align:center; }}
+    .summary-highlight td {{ background:#e7e6e6; font-weight:bold; }}
+    .note {{ margin-top:6pt; font-size:9pt; }}
+    .text-center {{ text-align:center; }}
+    .text-right {{ text-align:center; }}
+    .page-break {{ page-break-after:always; margin-top:20mm; }}
+    .appendix-title {{ text-align:center; font-weight:bold; margin-top:10pt; margin-bottom:12pt; }}
+    .appendix-grid {{ display:grid; grid-template-columns:repeat(2,1fr); gap:12pt; margin-top:8pt; }}
+    .receipt-item {{ break-inside:avoid; page-break-inside:avoid; }}
+    .receipt-caption {{ font-size:9pt; margin-bottom:4pt; }}
+    .receipt-image {{ width:100%; height:auto; max-height:260px; object-fit:contain; border:1px solid #000; }}
+    @media print {{ html,body {{ height:auto; overflow:visible; }} }}
+  </style>
+</head>
+<body onload="window.print()">
+<div class="page">
+
+  <div class="header-row">
+    <div class="header-cell left">{logo1_tag}</div>
+    <div class="header-cell center">
+      <p class="header-center-line">Republic of the Philippines</p>
+      <p class="header-center-line header-university">Laguna State Polytechnic University</p>
+      <p class="header-center-line">Province of Laguna</p>
+    </div>
+    <div class="header-cell right">{logo2_tag}</div>
+  </div>
+
+  <div class="org-title">
+    <span class="dept-name">{college_name}</span>
+    <span class="org-name">{org_name}</span>
+  </div>
+
+  <div class="statement-title">ACTIVITY FINANCIAL STATEMENT</div>
+
+  <table style="margin-top:4pt">
+    <tr><td class="section-label-cell">Name of Organization:</td>
+        <td class="section-value-cell">{org_name}</td></tr>
+    <tr><td class="section-label-cell">Name of the Event:</td>
+        <td class="section-value-cell">{rep.get('event_name') or ''}</td></tr>
+    <tr><td class="section-label-cell">Report for the Month of:</td>
+        <td class="section-value-cell">{report_month}</td></tr>
+    <tr><td class="section-label-cell">Date Prepared:</td>
+        <td class="section-value-cell">{rep.get('date_prepared') or ''}</td></tr>
+  </table>
+  <table style="margin-top:2pt;margin-bottom:6pt">
+    <tr><td class="section-label-cell">Financial Report No:</td>
+        <td class="section-value-cell">{rep.get('report_no') or ''}</td></tr>
+  </table>
+
+  <table>
+    <tr><td colspan="5" class="section-heading">EXPENSES</td></tr>
+    <tr><th>Date Issued</th><th>Quantity</th><th>Particulars</th>
+        <th>Description</th><th>Total</th></tr>
+    {_expense_rows()}
+    <tr class="summary-highlight">
+      <td colspan="4" class="text-right"><strong>Total Amount of Expenses</strong></td>
+      <td class="text-right"><strong>PHP {total_expense:,.2f}</strong></td>
+    </tr>
+  </table>
+
+  <table style="margin-top:6pt">
+    <tr><td colspan="5" class="section-heading">INCOME</td></tr>
+    <tr><th>Date Issued</th><th>Quantity</th><th>Type of Income</th>
+        <th>Description</th><th>Price</th></tr>
+    {_income_rows()}
+    <tr class="summary-highlight">
+      <td colspan="4" class="text-right"><strong>Total Amount of Income</strong></td>
+      <td class="text-right"><strong>PHP {total_income:,.2f}</strong></td>
+    </tr>
+  </table>
+
+  <table class="summary-table" style="margin-top:6pt">
+    <tr style="background:var(--gray-header);font-weight:bold">
+      <td>Budget:</td><td>PHP {budget_val:,.2f}</td></tr>
+    <tr><td>Total Amount of Expenses:</td><td>PHP {total_expense:,.2f}</td></tr>
+    <tr><td>Total Amount of Income:</td><td>PHP {total_income:,.2f}</td></tr>
+    <tr><td>Reimbursement of Expenses:</td><td>PHP {reimb:,.2f}</td></tr>
+    <tr><td>Previous Remaining Fund:</td><td>PHP {prev_fund:,.2f}</td></tr>
+  </table>
+  <table class="summary-table">
+    <tr style="background:var(--gray-header);font-weight:bold">
+      <td>Total Remaining Balance:</td><td>PHP {remaining:,.2f}</td></tr>
+    <tr><td>Budget in Bank:</td><td>PHP {bank:,.2f}</td></tr>
+  </table>
+
+  <p class="note">*NOTE: See APPENDIX A for receipts.</p>
+
+  {appendix_section}
+
+</div>
+</body>
+</html>"""
+
+        # ── write to temp file and open in browser ────────────────────
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".html", delete=False,
+                encoding="utf-8", prefix="pockitrack_print_")
+            tmp.write(html)
+            tmp.close()
+            webbrowser.open(f"file:///{tmp.name.replace(_os.sep, '/')}")
+        except Exception as e:
+            messagebox.showerror("Print Error", f"Could not open print preview: {e}")
+
+    def _confirm_submit_report(self, banner_canvas):
+        """Overlay confirm dialog before submitting the report to admin."""
+        root = self.winfo_toplevel()
+        root.update_idletasks()
+        rx, ry = root.winfo_rootx(), root.winfo_rooty()
+        rw, rh = root.winfo_width(), root.winfo_height()
+
+        try:
+            from PIL import ImageGrab, ImageEnhance
+            shot = ImageGrab.grab(bbox=(rx, ry, rx + rw, ry + rh))
+            shot = ImageEnhance.Brightness(shot).enhance(0.5)
+            _bg_ph = ImageTk.PhotoImage(shot)
+        except Exception:
+            _bg_ph = None
+
+        overlay = tk.Frame(root, bg="black")
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+
+        ov_cv = tk.Canvas(overlay, bd=0, highlightthickness=0)
+        ov_cv.place(relx=0, rely=0, relwidth=1, relheight=1)
+        if _bg_ph:
+            ov_cv.create_image(0, 0, anchor="nw", image=_bg_ph)
+            ov_cv._bg_ph = _bg_ph
+        else:
+            ov_cv.config(bg="black")
+            ov_cv.create_rectangle(0, 0, rw, rh, fill="black",
+                                   stipple="gray50", outline="")
+        ov_cv.bind("<Button-1>", lambda e: overlay.destroy())
+
+        modal = tk.Frame(overlay, bg=BG_WHITE, padx=0, pady=0,
+                         highlightbackground="#E0D4C0", highlightthickness=1)
+        modal.place(relx=0.5, rely=0.5, anchor="center", width=400)
+        modal.bind("<Button-1>", lambda e: "break")
+
+        # header
+        hdr = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=18)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="Submit Report", bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(13, "bold")).pack(side="left")
+        close_lbl = tk.Label(hdr, text="×", bg=BG_WHITE, fg="#616161",
+                             font=("Arial", 20), cursor="hand2", width=2)
+        close_lbl.pack(side="right")
+        close_lbl.bind("<Button-1>", lambda e: overlay.destroy())
+        close_lbl.bind("<Enter>", lambda e: close_lbl.config(bg="#F0F0F0"))
+        close_lbl.bind("<Leave>", lambda e: close_lbl.config(bg=BG_WHITE))
+        tk.Frame(modal, bg=_FILTER_BDR, height=2).pack(fill="x")
+
+        # body
+        body = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=22)
+        body.pack(fill="x")
+        tk.Label(body,
+                 text=("Submit this financial report to the admin?\n\n"
+                       "Once submitted, the report will be locked and\n"
+                       "sent to OSAS for review. This cannot be undone."),
+                 bg=BG_WHITE, fg=TEXT_DARK, font=font(10),
+                 wraplength=320, justify="left").pack(anchor="w")
+
+        # footer
+        tk.Frame(modal, bg=_FILTER_BDR, height=2).pack(fill="x")
+        footer = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=16)
+        footer.pack(fill="x")
+
+        cancel_btn = tk.Label(footer, text="Cancel", bg=BG_WHITE, fg="#616161",
+                              font=font(9, "bold"), padx=20, pady=8, cursor="hand2",
+                              highlightbackground=_FILTER_BDR, highlightthickness=1)
+        cancel_btn.pack(side="left")
+        cancel_btn.bind("<Button-1>", lambda e: overlay.destroy())
+        cancel_btn.bind("<Enter>", lambda e: cancel_btn.config(bg="#F5F1E8"))
+        cancel_btn.bind("<Leave>", lambda e: cancel_btn.config(bg=BG_WHITE))
+
+        def _do_submit(e=None):
+            yes_btn.config(text="Submitting…", bg="#888888")
+            overlay.update()
+            try:
+                submit_report(
+                    org_id    = self._org.get("id"),
+                    wallet_id = self._wallet["id"],
+                    budget_id = self._wallet["budget_id"],
+                )
+                overlay.destroy()
+                # redraw buttons in disabled/submitted state
+                self._show_report_action_buttons(banner_canvas, already_submitted=True)
+                # switch to Archives tab so user sees the new entry
+                self._switch_tab("archives")
+            except Exception as ex:
+                yes_btn.config(text="Yes, Submit", bg=_BTN_BROWN)
+                tk.Label(body, text=f"Submit failed: {str(ex)[:70]}",
+                         bg=BG_WHITE, fg="#C62828", font=font(8)).pack(
+                    anchor="w", pady=(8, 0))
+
+        yes_btn = tk.Label(footer, text="Yes, Submit", bg=_BTN_BROWN, fg="white",
+                           font=font(9, "bold"), padx=20, pady=8, cursor="hand2")
+        yes_btn.pack(side="right")
+        yes_btn.bind("<Button-1>", _do_submit)
+        yes_btn.bind("<Enter>", lambda e: yes_btn.config(bg=_BTN_HOV))
+        yes_btn.bind("<Leave>", lambda e: yes_btn.config(bg=_BTN_BROWN))
+
+    def _delete_tx(self, t):
         try:
             delete_wallet_transaction(t["id"])
             if self._active_tab == "transactions":
@@ -1233,17 +1887,19 @@ class WalletScreen(tk.Frame):
     def _tab_transactions(self):
         p = self._tab_content
 
-        # filter tabs
+        # filter tabs — pill-shaped, same rounding as sidebar
         flt_row = tk.Frame(p, bg=BG_WHITE)
         flt_row.pack(pady=(0, 12))
         self._flt_btns = {}
         for key, lbl in [("all","All"),("income","Income"),("expense","Expense")]:
-            b = tk.Label(flt_row, text=lbl, bg=BG_WHITE, fg=TEXT_DARK,
-                         font=font(9), padx=22, pady=7, cursor="hand2",
-                         highlightbackground=_FILTER_BDR, highlightthickness=2)
-            b.pack(side="left", padx=5)
-            b.bind("<Button-1>", lambda e, k=key: self._set_tx_filter(k))
-            self._flt_btns[key] = b
+            cv = self._make_pill_btn(
+                flt_row, lbl,
+                bg_hex=BG_WHITE, hover_hex=_FILTER_BDR,
+                fg=TEXT_DARK, width=80, height=34,
+                font_spec=font(9),
+                side="left", padx=5)
+            cv.bind("<Button-1>", lambda e, k=key: self._set_tx_filter(k))
+            self._flt_btns[key] = cv
         self._set_tx_filter(self._tx_filter, refresh=False)
         self._update_flt_styles()
 
@@ -1259,11 +1915,16 @@ class WalletScreen(tk.Frame):
             self._load_transactions()
 
     def _update_flt_styles(self):
-        for k, b in self._flt_btns.items():
+        for k, cv in self._flt_btns.items():
             if k == self._tx_filter:
-                b.config(bg=_FILTER_ACT, fg="white", highlightbackground=_FILTER_ACT)
+                cv._active_bg = _FILTER_ACT
+                cv._active_fg = "white"
             else:
-                b.config(bg=BG_WHITE, fg=TEXT_DARK, highlightbackground=_FILTER_BDR)
+                cv._active_bg = None
+                cv._active_fg = None
+            # trigger redraw via the stored _redraw callable
+            if hasattr(cv, "_redraw"):
+                cv.after(0, cv._redraw)
 
     def _load_transactions(self):
         for w in self._tx_list.winfo_children():
@@ -1281,20 +1942,45 @@ class WalletScreen(tk.Frame):
             rows = []
         loading.destroy()
 
+        if not rows:
+            # ── empty state with navi_history.png icon ────────────────
+            frm = tk.Frame(self._tx_list, bg=BG_WHITE)
+            frm.pack(expand=True, pady=40)
+            ico = _img("navi_history.png", 48, 48, self._imgs)
+            if ico:
+                tk.Label(frm, image=ico, bg=BG_WHITE).pack(pady=(0, 10))
+            tk.Label(frm, text="No transactions found.",
+                     bg=BG_WHITE, fg=TEXT_DARK,
+                     font=font(11, "bold")).pack()
+            tk.Label(frm, text="Try a different filter.",
+                     bg=BG_WHITE, fg=TEXT_MUTED,
+                     font=font(9)).pack(pady=(4, 0))
+            return
+
+        # ── scrollable list — scrollbar only appears when content overflows ──
         canvas = tk.Canvas(self._tx_list, bg=BG_WHITE, bd=0, highlightthickness=0)
         sb = ttk.Scrollbar(self._tx_list, orient="vertical", command=canvas.yview)
         inner = tk.Frame(canvas, bg=BG_WHITE)
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         win = canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
+
+        def _on_inner_configure(e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # only show scrollbar when content is taller than the canvas
+            content_h = inner.winfo_reqheight()
+            canvas_h  = canvas.winfo_height()
+            if content_h > canvas_h:
+                sb.pack(side="right", fill="y")
+            else:
+                sb.pack_forget()
+
+        inner.bind("<Configure>", _on_inner_configure)
+        canvas.bind("<Configure>", lambda e: (
+            canvas.itemconfig(win, width=e.width),
+            _on_inner_configure()
+        ))
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
         self._bind_scroll(canvas)
-
-        if not rows:
-            self._empty(inner, "No transactions found.", "Try a different filter.")
-            return
 
         for t in rows:
             self._tx_item(inner, t)
@@ -1393,7 +2079,7 @@ class WalletScreen(tk.Frame):
         del_lbl.bind("<Leave>", lambda e: del_lbl.config(bg="white"))
         del_lbl.bind("<Button-1>", lambda e, tx=t, dd=dot_drop: (
             _close_dot(dd),
-            self._delete_transaction(tx)
+            self._delete_tx(tx)
         ))
 
         dots.bind("<Button-1>", _toggle_dot)
@@ -1413,6 +2099,27 @@ class WalletScreen(tk.Frame):
             ending  = income - expense
         except Exception:
             budget = income = expense = ending = 0.0
+
+        # ── check if a report already exists for this specific wallet month ──
+        # We match on budget_id (unique per wallet+month) to ensure we don't
+        # show action buttons for a different month's report on the same wallet.
+        current_budget_id = self._wallet.get("budget_id")
+        try:
+            existing_report = get_latest_report(
+                self._org.get("id"),
+                self._wallet["id"],
+                current_budget_id,
+            ) if current_budget_id else {}
+        except Exception:
+            existing_report = {}
+
+        # double-check the returned report actually belongs to this month
+        if existing_report and existing_report.get("budget_id") != current_budget_id:
+            existing_report = {}
+
+        # check if already submitted — determines button state
+        already_submitted = (existing_report.get("status") == "Submitted"
+                             if existing_report else False)
 
         # gradient report header
         banner_canvas = tk.Canvas(p, bg=BG_WHITE, bd=0, highlightthickness=0, height=90)
@@ -1451,16 +2158,7 @@ class WalletScreen(tk.Frame):
             banner_canvas.delete("banner_bg")
             banner_canvas.create_image(0, 0, anchor="nw", image=ph, tags="banner_bg")
             banner_canvas.tag_lower("banner_bg")
-            # update button canvas bg to exact gradient color at its position
-            t_btn = max(0.0, min(1.0, (bw - _btn_w / 2) / bw)) if bw > 0 else 0.9
-            if t_btn <= 0.54:
-                s = t_btn / 0.54
-                _bc = tuple(int(c1[i] + (c2[i] - c1[i]) * s) for i in range(3))
-            else:
-                s = (t_btn - 0.54) / 0.46
-                _bc = tuple(int(c2[i] + (c3[i] - c2[i]) * s) for i in range(3))
-            gen_btn_cv.config(bg="#{:02x}{:02x}{:02x}".format(*_bc))
-            # reposition all items
+            # reposition icon + text
             cy = bh // 2
             x = 20
             if reports_img:
@@ -1476,7 +2174,6 @@ class WalletScreen(tk.Frame):
             banner_canvas.create_window(20, 0, anchor="w", window=ico_lbl, tags="ico")
             banner_canvas._ico = ico_lbl
 
-        # text drawn directly on canvas - no widget bg
         banner_canvas.create_text(0, 0, anchor="w", tags="title_txt",
                                   text="Generate Financial Report",
                                   fill=TEXT_DARK, font=font(11, "bold"))
@@ -1484,52 +2181,73 @@ class WalletScreen(tk.Frame):
                                   text="Create an Activity Financial Statement for this wallet.",
                                   fill="#5a3a00", font=font(8))
 
-        # generate button (white label, no gradient needed)
-        # rounded generate button with icon
-        _rep_ico = _img("reports.png", 14, 14, self._imgs)
-        gen_btn_cv = tk.Canvas(banner_canvas, bd=0, highlightthickness=0,
-                               bg="#ECB95D", cursor="hand2")
-        banner_canvas.create_window(0, 0, anchor="e", window=gen_btn_cv, tags="btn")
-
-        def _draw_gen_btn(hover=False):
-            gen_btn_cv.delete("all")
-            bw = gen_btn_cv.winfo_width()
-            bh = gen_btn_cv.winfo_height()
-            if bw < 4 or bh < 4:
-                return
-            from PIL import Image, ImageDraw
-            scale = 4
-            sw, sh = bw * scale, bh * scale
-            r = min(sh // 2, 20 * scale)  # fully pill-shaped radius
-            fill_col = (236, 220, 198, 255) if hover else (255, 255, 255, 255)
-            # draw on transparent base so corners are truly clear
-            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
-            ImageDraw.Draw(img).rounded_rectangle(
-                [0, 0, sw-1, sh-1], radius=r,
-                fill=fill_col,
-                outline=(236, 220, 198, 255), width=6)
-            img = img.resize((bw, bh), Image.LANCZOS)
-            ph = ImageTk.PhotoImage(img)
-            gen_btn_cv._ph = ph
-            gen_btn_cv.create_image(0, 0, anchor="nw", image=ph)
-            x = 12
-            if _rep_ico:
-                gen_btn_cv.create_image(x + 7, bh // 2, anchor="w", image=_rep_ico)
-                x += 26  # icon width + 6px gap
-            gen_btn_cv.create_text(x, bh // 2, anchor="w",
-                                   text="Generate report",
-                                   fill=TEXT_DARK, font=font(9, "bold"))
-
-        gen_btn_cv.bind("<Configure>", lambda e: _draw_gen_btn())
-        gen_btn_cv.bind("<Enter>",     lambda e: _draw_gen_btn(hover=True))
-        gen_btn_cv.bind("<Leave>",     lambda e: _draw_gen_btn(hover=False))
-        gen_btn_cv.bind("<Button-1>",  lambda e: self._open_report_dialog())
-
-        _btn_w = 168
-        _btn_h = 36
-        gen_btn_cv.config(width=_btn_w, height=_btn_h)
-
         banner_canvas.bind("<Configure>", _draw_report_banner)
+
+        # ── show action buttons if report exists, otherwise Generate button ──
+        if existing_report:
+            # report already generated — show action buttons
+            # pass already_submitted so buttons are greyed if already sent
+            self.after(50, lambda s=already_submitted:
+                       self._show_report_action_buttons(banner_canvas, already_submitted=s))
+        else:
+            # no report yet — show the Generate button
+            _rep_ico = _img("reports.png", 14, 14, self._imgs)
+            gen_btn_cv = tk.Canvas(banner_canvas, bd=0, highlightthickness=0,
+                                   bg="#ECB95D", cursor="hand2")
+            banner_canvas.create_window(0, 0, anchor="e", window=gen_btn_cv, tags="btn")
+
+            def _draw_gen_btn(hover=False):
+                gen_btn_cv.delete("all")
+                bw = gen_btn_cv.winfo_width()
+                bh = gen_btn_cv.winfo_height()
+                if bw < 4 or bh < 4:
+                    return
+                from PIL import Image, ImageDraw
+                scale = 4
+                sw, sh = bw * scale, bh * scale
+                r = min(sh // 2, 20 * scale)
+                fill_col = (236, 220, 198, 255) if hover else (255, 255, 255, 255)
+                img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+                ImageDraw.Draw(img).rounded_rectangle(
+                    [0, 0, sw-1, sh-1], radius=r,
+                    fill=fill_col,
+                    outline=(236, 220, 198, 255), width=6)
+                img = img.resize((bw, bh), Image.LANCZOS)
+                ph = ImageTk.PhotoImage(img)
+                gen_btn_cv._ph = ph
+                gen_btn_cv.create_image(0, 0, anchor="nw", image=ph)
+                x = 12
+                if _rep_ico:
+                    gen_btn_cv.create_image(x + 7, bh // 2, anchor="w", image=_rep_ico)
+                    x += 26
+                gen_btn_cv.create_text(x, bh // 2, anchor="w",
+                                       text="Generate report",
+                                       fill=TEXT_DARK, font=font(9, "bold"))
+
+            gen_btn_cv.bind("<Configure>", lambda e: _draw_gen_btn())
+            gen_btn_cv.bind("<Enter>",     lambda e: _draw_gen_btn(hover=True))
+            gen_btn_cv.bind("<Leave>",     lambda e: _draw_gen_btn(hover=False))
+            gen_btn_cv.bind("<Button-1>",  lambda e: self._open_report_dialog())
+
+            _btn_w = 168
+            _btn_h = 36
+            gen_btn_cv.config(width=_btn_w, height=_btn_h)
+
+            # update gen button bg colour when banner redraws
+            def _draw_report_banner_with_btn(event=None):
+                _draw_report_banner(event)
+                bw = banner_canvas.winfo_width()
+                c1, c2, c3 = (0xF3, 0xD5, 0x8D), (0xEC, 0xB9, 0x5D), (0xE5, 0x9E, 0x2C)
+                t_btn = max(0.0, min(1.0, (bw - _btn_w / 2) / bw)) if bw > 0 else 0.9
+                if t_btn <= 0.54:
+                    s = t_btn / 0.54
+                    _bc = tuple(int(c1[i] + (c2[i] - c1[i]) * s) for i in range(3))
+                else:
+                    s = (t_btn - 0.54) / 0.46
+                    _bc = tuple(int(c2[i] + (c3[i] - c2[i]) * s) for i in range(3))
+                gen_btn_cv.config(bg="#{:02x}{:02x}{:02x}".format(*_bc))
+
+            banner_canvas.bind("<Configure>", _draw_report_banner_with_btn)
 
         # stat cards - white with rounded border
         stats_row = tk.Frame(p, bg=BG_WHITE)
@@ -1588,21 +2306,23 @@ class WalletScreen(tk.Frame):
     # ── RECEIPTS TAB ──────────────────────────────────────────────────
     def _tab_receipts(self):
         p = self._tab_content
+
         loading = tk.Label(p, text="Loading receipts...",
                            bg=BG_WHITE, fg=TEXT_MUTED, font=font(9))
         loading.pack(pady=10)
         self.update()
 
         try:
-            receipts = get_wallet_receipts(self._wallet["id"])
+            # scope to this wallet month via budget_id
+            receipts = get_wallet_receipts(
+                self._wallet["id"],
+                budget_id=self._wallet.get("budget_id"),
+            )
         except Exception:
             receipts = []
         loading.destroy()
 
-        if not receipts:
-            self._empty(p, "No receipts found.", "No receipts uploaded for this wallet.")
-            return
-
+        # scrollable grid
         canvas = tk.Canvas(p, bg=BG_WHITE, bd=0, highlightthickness=0)
         sb = ttk.Scrollbar(p, orient="vertical", command=canvas.yview)
         inner = tk.Frame(canvas, bg=BG_WHITE)
@@ -1612,6 +2332,13 @@ class WalletScreen(tk.Frame):
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         self._bind_scroll(canvas)
+
+        self._receipts_inner = inner   # keep ref for refresh after upload
+
+        if not receipts:
+            self._empty(inner, "No receipts found.",
+                        "Use '+ Add → Add receipt' to upload one.")
+            return
 
         receipts_ico = _img("receipts.png", 36, 36, self._imgs)
         cols = 4
@@ -1627,25 +2354,364 @@ class WalletScreen(tk.Frame):
                         highlightthickness=2, padx=14, pady=14)
         card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
 
+        # icon area
         ico_frm = tk.Frame(card, bg="#F5F5F5", width=60, height=60)
         ico_frm.pack(pady=(0, 8))
         ico_frm.pack_propagate(False)
         if icon:
-            tk.Label(ico_frm, image=icon, bg="#F5F5F5").place(relx=0.5, rely=0.5, anchor="center")
+            tk.Label(ico_frm, image=icon, bg="#F5F5F5").place(
+                relx=0.5, rely=0.5, anchor="center")
 
         desc = r.get("description") or "Receipt"
-        date = r.get("receipt_date", "")[:10]
+        date = (r.get("receipt_date") or "")[:10]
         tk.Label(card, text=desc, bg=BG_WHITE, fg=TEXT_DARK,
                  font=font(8, "bold"), wraplength=130).pack()
         tk.Label(card, text=date, bg=BG_WHITE, fg=TEXT_MUTED,
-                 font=font(7)).pack(pady=(2, 8))
+                 font=font(7)).pack(pady=(2, 10))
 
-        view_btn = tk.Label(card, text="View", bg=_FILTER_BDR,
-                            fg=TEXT_DARK, font=font(8, "bold"),
-                            padx=10, pady=4, cursor="hand2")
-        view_btn.pack()
-        view_btn.bind("<Enter>", lambda e: view_btn.config(bg="#D4C4A8"))
-        view_btn.bind("<Leave>", lambda e: view_btn.config(bg=_FILTER_BDR))
+        # ── three action buttons ──────────────────────────────────────
+        btn_row = tk.Frame(card, bg=BG_WHITE)
+        btn_row.pack()
+
+        def _action_btn(parent, text, bg, hover_bg, command):
+            b = tk.Label(parent, text=text, bg=bg, fg=TEXT_DARK,
+                         font=font(7, "bold"), padx=8, pady=4, cursor="hand2")
+            b.pack(side="left", padx=2)
+            b.bind("<Button-1>", lambda e: command())
+            b.bind("<Enter>",    lambda e, w=b, hb=hover_bg: w.config(bg=hb))
+            b.bind("<Leave>",    lambda e, w=b, ob=bg:       w.config(bg=ob))
+            return b
+
+        file_path = r.get("file_url") or ""
+        receipt_id = r.get("id")
+
+        _action_btn(btn_row, "View",
+                    bg="#E3F2FD", hover_bg="#BBDEFB",
+                    command=lambda fp=file_path: self._view_receipt(fp))
+
+        _action_btn(btn_row, "Download",
+                    bg="#E8F5E9", hover_bg="#C8E6C9",
+                    command=lambda fp=file_path: self._download_receipt(fp))
+
+        _action_btn(btn_row, "Delete",
+                    bg="#FFEBEE", hover_bg="#FFCDD2",
+                    command=lambda rid=receipt_id: self._confirm_delete_receipt(rid))
+
+    def _view_receipt(self, file_path):
+        """Fetch public URL and open in default browser."""
+        import threading, webbrowser
+        if not file_path:
+            return
+
+        def _open():
+            try:
+                url = get_receipt_public_url(file_path)
+                if url:
+                    webbrowser.open(url)
+            except Exception:
+                pass
+
+        threading.Thread(target=_open, daemon=True).start()
+
+    def _download_receipt(self, file_path):
+        """Fetch download URL and open it (browser triggers download)."""
+        import threading, webbrowser
+        if not file_path:
+            return
+
+        def _dl():
+            try:
+                url = get_receipt_download_url(file_path)
+                if url:
+                    webbrowser.open(url)
+            except Exception:
+                pass
+
+        threading.Thread(target=_dl, daemon=True).start()
+
+    def _confirm_delete_receipt(self, receipt_id):
+        """Overlay confirm dialog before deleting a receipt."""
+        if not receipt_id:
+            return
+
+        root = self.winfo_toplevel()
+        root.update_idletasks()
+        rx, ry = root.winfo_rootx(), root.winfo_rooty()
+        rw, rh = root.winfo_width(), root.winfo_height()
+
+        try:
+            from PIL import ImageGrab, ImageEnhance
+            shot = ImageGrab.grab(bbox=(rx, ry, rx + rw, ry + rh))
+            shot = ImageEnhance.Brightness(shot).enhance(0.5)
+            _bg_ph = ImageTk.PhotoImage(shot)
+        except Exception:
+            _bg_ph = None
+
+        overlay = tk.Frame(root, bg="black")
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+
+        ov_cv = tk.Canvas(overlay, bd=0, highlightthickness=0)
+        ov_cv.place(relx=0, rely=0, relwidth=1, relheight=1)
+        if _bg_ph:
+            ov_cv.create_image(0, 0, anchor="nw", image=_bg_ph)
+            ov_cv._bg_ph = _bg_ph
+        else:
+            ov_cv.config(bg="black")
+            ov_cv.create_rectangle(0, 0, rw, rh, fill="black",
+                                   stipple="gray50", outline="")
+        ov_cv.bind("<Button-1>", lambda e: overlay.destroy())
+
+        modal = tk.Frame(overlay, bg=BG_WHITE, padx=0, pady=0,
+                         highlightbackground="#E0D4C0", highlightthickness=1)
+        modal.place(relx=0.5, rely=0.5, anchor="center", width=380)
+        modal.bind("<Button-1>", lambda e: "break")
+
+        # header
+        hdr = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=18)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="Delete Receipt", bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(13, "bold")).pack(side="left")
+        close_lbl = tk.Label(hdr, text="×", bg=BG_WHITE, fg="#616161",
+                             font=("Arial", 20), cursor="hand2", width=2)
+        close_lbl.pack(side="right")
+        close_lbl.bind("<Button-1>", lambda e: overlay.destroy())
+        close_lbl.bind("<Enter>", lambda e: close_lbl.config(bg="#F0F0F0"))
+        close_lbl.bind("<Leave>", lambda e: close_lbl.config(bg=BG_WHITE))
+        tk.Frame(modal, bg=_FILTER_BDR, height=2).pack(fill="x")
+
+        # body
+        body = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=22)
+        body.pack(fill="x")
+        tk.Label(body,
+                 text="Are you sure you want to delete this receipt?\nThis cannot be undone.",
+                 bg=BG_WHITE, fg=TEXT_DARK, font=font(10),
+                 wraplength=300, justify="left").pack(anchor="w")
+
+        # footer
+        tk.Frame(modal, bg=_FILTER_BDR, height=2).pack(fill="x")
+        footer = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=16)
+        footer.pack(fill="x")
+
+        cancel_btn = tk.Label(footer, text="Cancel", bg=BG_WHITE, fg="#616161",
+                              font=font(9, "bold"), padx=20, pady=8, cursor="hand2",
+                              highlightbackground=_FILTER_BDR, highlightthickness=1)
+        cancel_btn.pack(side="left")
+        cancel_btn.bind("<Button-1>", lambda e: overlay.destroy())
+        cancel_btn.bind("<Enter>", lambda e: cancel_btn.config(bg="#F5F1E8"))
+        cancel_btn.bind("<Leave>", lambda e: cancel_btn.config(bg=BG_WHITE))
+
+        def _do_delete(e=None):
+            del_btn.config(text="Deleting…", bg="#888888")
+            overlay.update()
+            try:
+                delete_receipt(receipt_id)
+                overlay.destroy()
+                # refresh receipts tab
+                if self._active_tab == "receipts":
+                    self._switch_tab("receipts")
+            except Exception as ex:
+                del_btn.config(text="Delete", bg="#C62828")
+                tk.Label(body, text=f"Failed: {str(ex)[:60]}",
+                         bg=BG_WHITE, fg="#C62828", font=font(8)).pack(
+                    anchor="w", pady=(8, 0))
+
+        del_btn = tk.Label(footer, text="Delete", bg="#C62828", fg="white",
+                           font=font(9, "bold"), padx=20, pady=8, cursor="hand2")
+        del_btn.pack(side="right")
+        del_btn.bind("<Button-1>", _do_delete)
+        del_btn.bind("<Enter>", lambda e: del_btn.config(bg="#B71C1C"))
+        del_btn.bind("<Leave>", lambda e: del_btn.config(bg="#C62828"))
+
+    def _open_receipt_dialog(self):
+        """Overlay modal to upload a receipt for the current wallet month."""
+        from tkinter import filedialog
+        wallet = self._wallet
+
+        root = self.winfo_toplevel()
+        root.update_idletasks()
+        rx, ry = root.winfo_rootx(), root.winfo_rooty()
+        rw, rh = root.winfo_width(), root.winfo_height()
+
+        try:
+            from PIL import ImageGrab, ImageEnhance
+            shot = ImageGrab.grab(bbox=(rx, ry, rx + rw, ry + rh))
+            shot = ImageEnhance.Brightness(shot).enhance(0.5)
+            _bg_ph = ImageTk.PhotoImage(shot)
+        except Exception:
+            _bg_ph = None
+
+        overlay = tk.Frame(root, bg="black")
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+
+        ov_cv = tk.Canvas(overlay, bd=0, highlightthickness=0)
+        ov_cv.place(relx=0, rely=0, relwidth=1, relheight=1)
+        if _bg_ph:
+            ov_cv.create_image(0, 0, anchor="nw", image=_bg_ph)
+            ov_cv._bg_ph = _bg_ph
+        else:
+            ov_cv.config(bg="black")
+            ov_cv.create_rectangle(0, 0, rw, rh, fill="black",
+                                   stipple="gray50", outline="")
+        ov_cv.bind("<Button-1>", lambda e: overlay.destroy())
+
+        modal = tk.Frame(overlay, bg=BG_WHITE, padx=0, pady=0,
+                         highlightbackground="#E0D4C0", highlightthickness=1)
+        modal.place(relx=0.5, rely=0.5, anchor="center", width=440)
+        modal.bind("<Button-1>", lambda e: "break")
+
+        # ── header ────────────────────────────────────────────────────
+        hdr = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=18)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="Add Receipt", bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(13, "bold")).pack(side="left")
+        close_lbl = tk.Label(hdr, text="×", bg=BG_WHITE, fg="#616161",
+                             font=("Arial", 20), cursor="hand2", width=2)
+        close_lbl.pack(side="right")
+        close_lbl.bind("<Button-1>", lambda e: overlay.destroy())
+        close_lbl.bind("<Enter>", lambda e: close_lbl.config(bg="#F0F0F0"))
+        close_lbl.bind("<Leave>", lambda e: close_lbl.config(bg=BG_WHITE))
+        tk.Frame(modal, bg=_FILTER_BDR, height=2).pack(fill="x")
+
+        # ── body ──────────────────────────────────────────────────────
+        body = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=20)
+        body.pack(fill="x")
+
+        err_labels = {}
+
+        def _lbl_entry(label_text, key, prefill=""):
+            grp = tk.Frame(body, bg=BG_WHITE)
+            grp.pack(fill="x", pady=(0, 10))
+            tk.Label(grp, text=label_text, bg=BG_WHITE, fg=TEXT_DARK,
+                     font=font(8, "bold")).pack(anchor="w")
+            e = tk.Entry(grp, font=font(10), bd=1, relief="solid",
+                         bg="#F9F9F9", fg=TEXT_DARK,
+                         highlightbackground=_FILTER_BDR, highlightthickness=1)
+            e.insert(0, prefill)
+            e.pack(fill="x", ipady=7, pady=(4, 0))
+            err = tk.Label(grp, text="", bg=BG_WHITE, fg="#C62828", font=font(7))
+            err.pack(anchor="w")
+            err_labels[key] = err
+            return e
+
+        e_desc = _lbl_entry("Description", "desc")
+        e_date = _lbl_entry("Receipt Date (YYYY-MM-DD)", "date",
+                            prefill=datetime.now().strftime("%Y-%m-%d"))
+
+        # file picker row
+        file_grp = tk.Frame(body, bg=BG_WHITE)
+        file_grp.pack(fill="x", pady=(0, 4))
+        tk.Label(file_grp, text="File (image or PDF)", bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(8, "bold")).pack(anchor="w")
+
+        file_row = tk.Frame(file_grp, bg=BG_WHITE)
+        file_row.pack(fill="x", pady=(4, 0))
+
+        file_var = tk.StringVar(value="")
+        file_lbl = tk.Label(file_row, textvariable=file_var,
+                            text="No file chosen", bg="#F9F9F9", fg=TEXT_MUTED,
+                            font=font(9), anchor="w", padx=10,
+                            highlightbackground=_FILTER_BDR, highlightthickness=1)
+        file_lbl.pack(side="left", fill="x", expand=True, ipady=7)
+
+        chosen_path = {"path": ""}
+
+        def _pick_file():
+            path = filedialog.askopenfilename(
+                title="Choose receipt file",
+                filetypes=[
+                    ("Images & PDF", "*.png *.jpg *.jpeg *.gif *.webp *.pdf"),
+                    ("All files", "*.*"),
+                ])
+            if path:
+                chosen_path["path"] = path
+                fname = _os.path.basename(path)
+                file_var.set(fname)
+                file_lbl.config(fg=TEXT_DARK)
+                err_labels["file"].config(text="")
+
+        browse_btn = tk.Label(file_row, text="Browse", bg=_BTN_BROWN, fg="white",
+                              font=font(8, "bold"), padx=14, pady=7, cursor="hand2")
+        browse_btn.pack(side="right", padx=(8, 0))
+        browse_btn.bind("<Button-1>", lambda e: _pick_file())
+        browse_btn.bind("<Enter>", lambda e: browse_btn.config(bg=_BTN_HOV))
+        browse_btn.bind("<Leave>", lambda e: browse_btn.config(bg=_BTN_BROWN))
+
+        err_file = tk.Label(file_grp, text="", bg=BG_WHITE, fg="#C62828", font=font(7))
+        err_file.pack(anchor="w")
+        err_labels["file"] = err_file
+
+        # ── footer ────────────────────────────────────────────────────
+        tk.Frame(modal, bg=_FILTER_BDR, height=2).pack(fill="x")
+        footer = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=16)
+        footer.pack(fill="x")
+
+        cancel_btn = tk.Label(footer, text="Cancel", bg=BG_WHITE, fg="#616161",
+                              font=font(9, "bold"), padx=20, pady=8, cursor="hand2",
+                              highlightbackground=_FILTER_BDR, highlightthickness=1)
+        cancel_btn.pack(side="left")
+        cancel_btn.bind("<Button-1>", lambda e: overlay.destroy())
+        cancel_btn.bind("<Enter>", lambda e: cancel_btn.config(bg="#F5F1E8"))
+        cancel_btn.bind("<Leave>", lambda e: cancel_btn.config(bg=BG_WHITE))
+
+        def _show_err(key, msg):
+            if key in err_labels:
+                err_labels[key].config(text=msg)
+
+        def _upload(e=None):
+            desc_val = e_desc.get().strip()
+            date_val = e_date.get().strip()
+            path_val = chosen_path["path"]
+
+            valid = True
+            if not desc_val:
+                _show_err("desc", "Description is required."); valid = False
+            else:
+                err_labels["desc"].config(text="")
+            if not date_val:
+                _show_err("date", "Date is required."); valid = False
+            else:
+                err_labels["date"].config(text="")
+            if not path_val:
+                _show_err("file", "Please choose a file."); valid = False
+
+            if not valid:
+                return
+
+            save_btn.config(text="Uploading…", bg="#888888")
+            overlay.update()
+
+            try:
+                with open(path_val, "rb") as f:
+                    file_bytes = f.read()
+
+                add_wallet_receipt(
+                    wallet_id    = wallet["id"],
+                    budget_id    = wallet["budget_id"],
+                    org_id       = self._org.get("id"),
+                    org_name     = self._org.get("org_name", "org"),
+                    wallet_name  = wallet.get("wallet_name", "wallet"),
+                    month_name   = wallet.get("month_name", "month"),
+                    file_bytes   = file_bytes,
+                    filename     = _os.path.basename(path_val),
+                    description  = desc_val,
+                    receipt_date = date_val,
+                )
+                overlay.destroy()
+                # refresh receipts tab if currently visible
+                if self._active_tab == "receipts":
+                    self._switch_tab("receipts")
+            except Exception as ex:
+                save_btn.config(text="Upload", bg=_BTN_BROWN)
+                _show_err("file", f"Upload failed: {str(ex)[:60]}")
+
+        save_btn = tk.Label(footer, text="Upload", bg=_BTN_BROWN, fg="white",
+                            font=font(9, "bold"), padx=20, pady=8, cursor="hand2")
+        save_btn.pack(side="right")
+        save_btn.bind("<Button-1>", _upload)
+        save_btn.bind("<Enter>", lambda e: save_btn.config(bg=_BTN_HOV))
+        save_btn.bind("<Leave>", lambda e: save_btn.config(bg=_BTN_BROWN))
 
     # ── ARCHIVES TAB ──────────────────────────────────────────────────
     def _tab_archives(self):
@@ -1656,13 +2722,19 @@ class WalletScreen(tk.Frame):
         self.update()
 
         try:
-            reports = get_wallet_reports(self._org.get("id"), self._wallet["id"])
+            # Query financial_report_archives scoped to this wallet month
+            reports = get_wallet_archives(
+                self._org.get("id"),
+                self._wallet["id"],
+                self._wallet["budget_id"],
+            )
         except Exception:
             reports = []
         loading.destroy()
 
         if not reports:
-            self._empty(p, "No archived reports.", "No financial reports submitted yet.")
+            self._empty(p, "No archived reports.",
+                        "Submit a financial report to see it here.")
             return
 
         canvas = tk.Canvas(p, bg=BG_WHITE, bd=0, highlightthickness=0)
@@ -1692,17 +2764,21 @@ class WalletScreen(tk.Frame):
         tk.Label(card, text=rep_no, bg=BG_WHITE, fg=TEXT_DARK,
                  font=font(10, "bold")).pack()
 
-        event = rep.get("event_name") or "—"
-        date  = (rep.get("submission_date") or "")[:10]
-        status = rep.get("status") or "—"
-        income  = rep.get("total_income")  or 0
-        expense = rep.get("total_expense") or 0
-        ending  = (income or 0) - (expense or 0)
+        event   = rep.get("event_name")   or "—"
+        date    = (rep.get("date_prepared") or "")[:10]
+        budget  = float(rep.get("budget")        or 0)
+        expense = float(rep.get("total_expense") or 0)
+        reimb   = float(rep.get("reimbursement") or 0)
+        prev    = float(rep.get("previous_fund") or 0)
+        remaining = float(rep.get("remaining")   or 0)
 
-        for lbl, val in [("Event", event), ("Date", date), ("Status", status),
-                         ("Income", f"₱{income:,.2f}"),
-                         ("Expense", f"₱{expense:,.2f}"),
-                         ("Ending Cash", f"₱{ending:,.2f}")]:
+        for lbl, val in [
+            ("Event",       event),
+            ("Date",        date),
+            ("Budget",      f"₱{budget:,.2f}"),
+            ("Expenses",    f"₱{expense:,.2f}"),
+            ("Remaining",   f"₱{remaining:,.2f}"),
+        ]:
             row_f = tk.Frame(card, bg=BG_WHITE)
             row_f.pack(fill="x", pady=1)
             tk.Label(row_f, text=lbl+":", bg=BG_WHITE, fg=TEXT_MUTED,
@@ -1710,12 +2786,196 @@ class WalletScreen(tk.Frame):
             tk.Label(row_f, text=str(val), bg=BG_WHITE, fg=TEXT_DARK,
                      font=font(7, "bold"), anchor="w").pack(side="left")
 
-        dl_btn = tk.Label(card, text="Download", bg=_BTN_BROWN,
-                          fg="white", font=font(8, "bold"),
-                          padx=10, pady=4, cursor="hand2")
+        # Download button — pill-shaped, same rounding as sidebar
+        archive_id = rep.get("id")
+        dl_btn = self._make_pill_btn(
+            card, "Download",
+            bg_hex=_BTN_BROWN, hover_hex=_BTN_HOV,
+            fg="white", width=110, height=30,
+            font_spec=font(8, "bold"),
+            command=lambda aid=archive_id: self._download_archive_docx(aid))
         dl_btn.pack(pady=(8, 0))
-        dl_btn.bind("<Enter>", lambda e: dl_btn.config(bg=_BTN_HOV))
-        dl_btn.bind("<Leave>", lambda e: dl_btn.config(bg=_BTN_BROWN))
+
+    def _download_archive_docx(self, archive_id):
+        """
+        Generate a docx from the archive snapshot and save it locally.
+        Mirrors web's GET /api/archives/<archive_id>/download.
+        """
+        import os as _os
+        from docx import Document
+        from docx.shared import Inches
+        from io import BytesIO as _BytesIO
+        from tkinter import filedialog, messagebox
+
+        # fetch archive summary
+        try:
+            arch_res = (_sb_client().table("financial_report_archives")
+                        .select("*").eq("id", archive_id).limit(1).execute())
+            if not arch_res.data:
+                messagebox.showwarning("Not Found", "Archive record not found.")
+                return
+            arch = arch_res.data[0]
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not fetch archive: {e}")
+            return
+
+        wallet_id = arch["wallet_id"]
+        budget_id = arch["budget_id"]
+        org_id    = self._org.get("id")
+
+        template_path = _os.path.join(
+            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+            "assets", "template", "finance_report_template.docx")
+        try:
+            doc = Document(template_path)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open template: {e}")
+            return
+
+        def _replace(old, new):
+            new = str(new) if new is not None else ""
+            for p in doc.paragraphs:
+                if old in p.text:
+                    for run in p.runs:
+                        run.text = run.text.replace(old, new)
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        if old in cell.text:
+                            for p in cell.paragraphs:
+                                for run in p.runs:
+                                    run.text = run.text.replace(old, new)
+
+        budget_val    = float(arch.get("budget")        or 0)
+        total_expense = float(arch.get("total_expense") or 0)
+        reimb         = float(arch.get("reimbursement") or 0)
+        prev_fund     = float(arch.get("previous_fund") or 0)
+        remaining     = float(arch.get("remaining")     or 0)
+        month_label   = self._wallet.get("month_name", "").capitalize()
+        report_month  = f"{month_label} {self._wallet.get('year', '')}".upper()
+
+        _replace("{{COLLEGE_NAME}}",       self._org.get("department", ""))
+        _replace("{{ORG_NAME}}",           self._org.get("org_name", ""))
+        _replace("{{EVENT_NAME}}",         arch.get("event_name") or "")
+        _replace("{{REPORT_MONTH}}",       report_month)
+        _replace("{{DATE_PREPARED}}",      str(arch.get("date_prepared") or ""))
+        _replace("{{REPORT_NO}}",          arch.get("report_no") or "")
+        _replace("{{BUDGET}}",             f"PHP {budget_val:,.2f}")
+        _replace("{{TOTAL_EXPENSE}}",      f"PHP {total_expense:,.2f}")
+        _replace("{{REIMBURSEMENT}}",      f"PHP {reimb:,.2f}")
+        _replace("{{PREVIOUS_FUND}}",      f"PHP {prev_fund:,.2f}")
+        _replace("{{TOTAL_REMAINING}}",    f"PHP {remaining:,.2f}")
+
+        # fetch archived transactions
+        try:
+            tx_res = (_sb_client().table("financial_report_archive_transactions")
+                      .select("*").eq("archive_id", archive_id)
+                      .order("date_issued").execute())
+            txs     = [t for t in (tx_res.data or []) if t.get("kind") == "expense"]
+            incomes = [t for t in (tx_res.data or []) if t.get("kind") == "income"]
+        except Exception:
+            txs = incomes = []
+
+        total_income = sum(float(t.get("price", 0)) * int(t.get("quantity", 1))
+                          for t in incomes)
+        _replace("{{TOTAL_INCOME}}",       f"PHP {total_income:,.2f}")
+        _replace("{{BUDGET_IN_THE_BANK}}", f"PHP {remaining:,.2f}")
+
+        # fill expense table
+        expenses_table = None
+        for table in doc.tables:
+            if len(table.rows) < 2:
+                continue
+            hdr = " ".join(c.text for c in table.rows[1].cells).upper()
+            if "DATE ISSUED" in hdr and "PARTICULARS" in hdr:
+                expenses_table = table
+                break
+        if expenses_table and txs:
+            while len(expenses_table.rows) > 3:
+                expenses_table._tbl.remove(expenses_table.rows[2]._tr)
+            summary_row = expenses_table.rows[-1]
+            for tx in txs:
+                new_row = expenses_table.add_row()
+                expenses_table._tbl.remove(new_row._tr)
+                summary_row._tr.addprevious(new_row._tr)
+                dc, qc, pc, desc_c, tc = new_row.cells
+                dc.text     = str(tx.get("date_issued", ""))[:10]
+                qc.text     = str(tx.get("quantity", ""))
+                pc.text     = tx.get("particulars") or ""
+                desc_c.text = tx.get("description") or ""
+                tc.text     = f"PHP {float(tx.get('price',0))*int(tx.get('quantity',1)):,.2f}"
+            summary_row.cells[-1].text = f"PHP {total_expense:,.2f}"
+
+        # fill income table
+        income_table = None
+        for table in doc.tables:
+            if len(table.rows) < 2:
+                continue
+            hdr = " ".join(c.text for c in table.rows[1].cells).upper()
+            if "TYPE OF INCOME" in hdr and "DATE ISSUED" in hdr:
+                income_table = table
+                break
+        if income_table and incomes:
+            while len(income_table.rows) > 3:
+                income_table._tbl.remove(income_table.rows[2]._tr)
+            summary_row_inc = income_table.rows[-1]
+            for tx in incomes:
+                new_row = income_table.add_row()
+                income_table._tbl.remove(new_row._tr)
+                summary_row_inc._tr.addprevious(new_row._tr)
+                dc, qc, tc, desc_c, pc = new_row.cells
+                dc.text     = str(tx.get("date_issued", ""))[:10]
+                qc.text     = str(tx.get("quantity", ""))
+                tc.text     = tx.get("income_type") or ""
+                desc_c.text = tx.get("description") or ""
+                pc.text     = f"PHP {float(tx.get('price',0)):,.2f}"
+            summary_row_inc.cells[-1].text = f"PHP {total_income:,.2f}"
+
+        # fetch archived receipts and embed as images
+        try:
+            rc_res = (_sb_client().table("financial_report_archive_receipts")
+                      .select("*").eq("archive_id", archive_id)
+                      .order("receipt_date").execute())
+            arch_receipts = rc_res.data or []
+        except Exception:
+            arch_receipts = []
+
+        if arch_receipts:
+            title_p = doc.add_paragraph()
+            title_p.add_run("APPENDIX: RECEIPTS").bold = True
+            for r in arch_receipts:
+                fp = r.get("file_url") or ""
+                if not fp:
+                    continue
+                try:
+                    file_bytes = download_receipt_bytes(fp)
+                except Exception:
+                    continue
+                cap_p = doc.add_paragraph()
+                cap_p.alignment = 1
+                cap_p.add_run(f"{(r.get('receipt_date') or '')[:10]} - "
+                              f"{r.get('description') or ''}")
+                try:
+                    doc.add_picture(_BytesIO(file_bytes), width=Inches(3))
+                    doc.paragraphs[-1].alignment = 1
+                except Exception:
+                    pass
+                spacer = doc.add_paragraph()
+                spacer.alignment = 1
+
+        default_name = arch.get("report_no") or "financial_report_archive"
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".docx",
+            filetypes=[("Word Document", "*.docx")],
+            initialfile=f"{default_name}.docx",
+            title="Save Archive Report")
+        if not save_path:
+            return
+        try:
+            doc.save(save_path)
+            messagebox.showinfo("Saved", f"Report saved to:\n{save_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save: {e}")
 
     # ── helpers ───────────────────────────────────────────────────────
     def _clear_box(self):
