@@ -25,26 +25,13 @@ def get_home_data(org_id: int) -> dict:
     wallets_res = _sb.table("wallets").select("id,name").eq("organization_id", org_id).eq("status", "active").execute()
     wallets = wallets_res.data or []
     wallet_ids = [w["id"] for w in wallets]
+    wallet_name_map = {w["id"]: w["name"] for w in wallets}
 
     # transactions for all wallets
     transactions = []
     if wallet_ids:
         tx_res = _sb.table("wallet_transactions").select("*").in_("wallet_id", wallet_ids).order("date_issued", desc=True).limit(20).execute()
         transactions = tx_res.data or []
-
-    # wallet balances: sum income - sum expense per wallet
-    wallet_balances = {}
-    for w in wallets:
-        wid = w["id"]
-        wtx = [t for t in transactions if t["wallet_id"] == wid]
-        balance = sum(
-            (t["price"] * t["quantity"]) if t["kind"] == "income"
-            else -(t["price"] * t["quantity"])
-            for t in wtx
-        )
-        wallet_balances[wid] = balance
-
-    total_balance = sum(wallet_balances.values())
 
     # this month income & expense
     now = datetime.now()
@@ -53,17 +40,89 @@ def get_home_data(org_id: int) -> dict:
     income_month  = sum(t["price"] * t["quantity"] for t in month_tx if t["kind"] == "income")
     expense_month = sum(t["price"] * t["quantity"] for t in month_tx if t["kind"] == "expense")
 
-    # total number of wallets as proxy for events
-    total_wallets = len(wallets)
+    # total balance across all wallets
+    total_balance = sum(
+        (t["price"] * t["quantity"]) if t["kind"] == "income"
+        else -(t["price"] * t["quantity"])
+        for t in transactions
+    )
+
+    # ── Wallets overview — per budget-folder, same as web /api/wallets/overview ──
+    wallets_overview = []
+    if wallet_ids:
+        bud_res = _sb.table("wallet_budgets") \
+            .select("id,wallet_id,amount,year,month_id,months(month_name)") \
+            .in_("wallet_id", wallet_ids).execute()
+        budgets = bud_res.data or []
+        budget_ids = [b["id"] for b in budgets]
+
+        if budget_ids:
+            folder_tx_res = _sb.table("wallet_transactions") \
+                .select("budget_id,kind,quantity,price,date_issued") \
+                .in_("budget_id", budget_ids).execute()
+            folder_txs = folder_tx_res.data or []
+        else:
+            folder_txs = []
+
+        by_folder = {}
+        for b in budgets:
+            fid = b["id"]
+            month_name = ""
+            if b.get("months"):
+                month_name = (b["months"].get("month_name") or "").upper()
+            wallet_n = wallet_name_map.get(b["wallet_id"], "")
+            by_folder[fid] = {
+                "id":             fid,
+                "wallet_id":      b["wallet_id"],
+                "name":           f"{month_name} – {wallet_n}" if wallet_n else month_name,
+                "budget":         float(b.get("amount") or 0),
+                "total_income":   0.0,
+                "total_expenses": 0.0,
+                "last_activity":  None,
+            }
+
+        for tx in folder_txs:
+            fid = tx.get("budget_id")
+            if fid not in by_folder:
+                continue
+            amt = float(tx.get("price", 0)) * int(tx.get("quantity", 1))
+            if tx.get("kind") == "income":
+                by_folder[fid]["total_income"] += amt
+            elif tx.get("kind") == "expense":
+                by_folder[fid]["total_expenses"] += amt
+            ts = tx.get("date_issued")
+            if ts:
+                cur = by_folder[fid]["last_activity"]
+                if not cur or ts > cur:
+                    by_folder[fid]["last_activity"] = ts
+
+        # only folders with activity, sorted by most recent
+        active = [v for v in by_folder.values()
+                  if v["total_income"] > 0 or v["total_expenses"] > 0]
+        active.sort(key=lambda x: x["last_activity"] or "", reverse=True)
+        wallets_overview = active
+
+    # reports submitted
+    try:
+        rep_res = _sb.table("financial_reports") \
+            .select("id", count="exact") \
+            .eq("organization_id", org_id) \
+            .in_("status", ["Submitted", "Approved"]) \
+            .not_.is_("wallet_id", None) \
+            .execute()
+        reports_submitted = rep_res.count or 0
+    except Exception:
+        reports_submitted = 0
 
     return {
-        "total_balance":  total_balance,
-        "total_wallets":  total_wallets,
-        "income_month":   income_month,
-        "expense_month":  expense_month,
-        "wallets":        [(w["name"], wallet_balances[w["id"]]) for w in wallets],
-        "transactions":   transactions[:10],
-        "wallet_map":     {w["id"]: w["name"] for w in wallets},
+        "total_balance":     total_balance,
+        "income_month":      income_month,
+        "expense_month":     expense_month,
+        "reports":           reports_submitted,
+        "wallets_overview":  wallets_overview,   # new — per-folder with budget/income/expense
+        "wallets":           [(w["name"], 0) for w in wallets],  # kept for compat
+        "transactions":      transactions[:10],
+        "wallet_map":        wallet_name_map,
     }
 
 

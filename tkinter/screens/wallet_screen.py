@@ -269,8 +269,7 @@ class WalletScreen(tk.Frame):
 
         self._all_wallets  = all_wallets
         self._wallet_cards = []
-        wallet_img = _img_rounded("wallet.png", 240, 200, 14, self._imgs)
-        self._wallet_img   = wallet_img
+        self._wallet_img   = None   # image is loaded dynamically per card at render time
 
         # wire up filters — rebuild grid on change
         self._search_var.trace_add("write", lambda *_: self._apply_filters())
@@ -306,34 +305,60 @@ class WalletScreen(tk.Frame):
         for i, w in enumerate(visible):
             if i % cols == 0:
                 row_f = tk.Frame(self._grid_inner, bg=BG_WHITE)
-                row_f.pack(anchor="w", pady=(0, 8))
+                row_f.pack(fill="x", pady=(0, 8))
+                for c in range(cols):
+                    row_f.columnconfigure(c, weight=1, uniform="walletcol")
             color = _CARD_COLORS[i % len(_CARD_COLORS)]
-            card = self._wallet_card(row_f, w, color, self._wallet_img)
+            card = self._wallet_card(row_f, w, color, self._wallet_img, col=i % cols)
             self._wallet_cards.append((card, w))
 
-    def _wallet_card(self, parent, w, color, wallet_img):
-        CARD_W, CARD_H = 240, 200
-
+    def _wallet_card(self, parent, w, color, wallet_img, col=0):
         outer = tk.Frame(parent, bg="white", cursor="hand2")
-        outer.pack(side="left", padx=(0, 12), pady=4)
+        outer.grid(row=0, column=col, padx=(0, 8), pady=4, sticky="nsew")
 
-        cv = tk.Canvas(outer, width=CARD_W, height=CARD_H,
+        # canvas fills the outer frame — height is fixed, width is dynamic
+        CARD_H = 185
+        cv = tk.Canvas(outer, height=CARD_H,
                        bd=0, highlightthickness=0, bg="white")
-        cv.pack()
+        cv.pack(fill="x", expand=True)
 
-        if wallet_img:
-            cv.create_image(0, 0, image=wallet_img, anchor="nw")
+        imgs_ref = self._imgs   # capture ref to screen-level image cache
 
-        month_name = w.get("month_name", "").upper()
-        pad_x, pad_y = 6, 3
-        text_w = len(month_name) * 7 + pad_x * 2
-        text_h = 16 + pad_y * 2
-        x1, y1 = 8, CARD_H - 10 - text_h
-        x2, y2 = x1 + text_w, CARD_H - 10
-        cv.create_rectangle(x1, y1, x2, y2, fill="white", outline="", width=0)
-        cv.create_text(x1 + pad_x, (y1 + y2) // 2,
-                       text=month_name, anchor="w",
-                       font=font(8, "bold"), fill=TEXT_DARK)
+        def _redraw(event=None):
+            cw = cv.winfo_width()
+            if cw < 10:
+                return
+            cv.delete("all")
+            try:
+                from PIL import Image as _Img, ImageDraw as _ID, ImageTk as _ITk
+                raw = _Img.open(
+                    _os.path.join(_ASSETS, "wallet.png")
+                ).resize((cw, CARD_H), _Img.LANCZOS).convert("RGBA")
+                # apply small rounded corners (radius=10)
+                mask = _Img.new("L", (cw, CARD_H), 0)
+                _ID.Draw(mask).rounded_rectangle(
+                    (0, 0, cw - 1, CARD_H - 1), radius=10, fill=255)
+                bg = _Img.new("RGBA", (cw, CARD_H), (255, 255, 255, 255))
+                bg.paste(raw, mask=mask)
+                ph = _ITk.PhotoImage(bg.convert("RGB"))
+                imgs_ref.append(ph)   # keep alive in screen-level cache
+                cv.create_image(0, 0, image=ph, anchor="nw")
+            except Exception:
+                pass
+
+            month_name = w.get("month_name", "").upper()
+            pad_x, pad_y = 6, 3
+            text_h = 16 + pad_y * 2
+            x1 = 8
+            y1 = CARD_H - 10 - text_h
+            x2 = x1 + len(month_name) * 7 + pad_x * 2
+            y2 = CARD_H - 10
+            cv.create_rectangle(x1, y1, x2, y2, fill="white", outline="", width=0)
+            cv.create_text(x1 + pad_x, (y1 + y2) // 2,
+                           text=month_name, anchor="w",
+                           font=font(8, "bold"), fill=TEXT_DARK)
+
+        cv.bind("<Configure>", _redraw)
 
         def _enter(e): cv.config(bg="#F5F1E8")
         def _leave(e): cv.config(bg="white")

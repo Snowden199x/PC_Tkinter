@@ -25,6 +25,26 @@ def _load_img(name, w, h, cache):
         return None
 
 
+def _load_img_rounded(name, w, h, radius, cache):
+    """Load image with rounded corners using a PIL mask."""
+    path = _os.path.join(_ASSETS, name)
+    if not _os.path.exists(path):
+        return None
+    try:
+        from PIL import ImageDraw
+        img = Image.open(path).resize((w, h), Image.LANCZOS).convert("RGBA")
+        # composite onto white background so corners are white, not transparent/black
+        bg = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, w, h), radius=radius, fill=255)
+        bg.paste(img, mask=mask)
+        ph = ImageTk.PhotoImage(bg.convert("RGB"))
+        cache.append(ph)
+        return ph
+    except Exception:
+        return _load_img(name, w, h, cache)
+
+
 class HomeScreen(tk.Frame):
     def __init__(self, parent, org=None, **kwargs):
         super().__init__(parent, bg=BG_CREAM, **kwargs)
@@ -215,7 +235,7 @@ class HomeScreen(tk.Frame):
         overview.columnconfigure(0, weight=1)
         overview.columnconfigure(1, weight=1)
 
-        self._build_wallets(overview, d["wallets"])
+        self._build_wallets(overview, d.get("wallets_overview", []))
         self._build_history(overview, d["transactions"])
 
     # ── Wallets panel ─────────────────────────────────────────────────
@@ -238,65 +258,95 @@ class HomeScreen(tk.Frame):
         inner = tk.Frame(canvas, bg=BG_WHITE)
         inner.bind("<Configure>",
                    lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        wallet_img = _load_img("wallet.png", 55, 48, self._imgs)
+        wallet_img = _load_img_rounded("wallet.png", 64, 56, 7, self._imgs)
 
         if not wallets:
-            tk.Label(inner, text="No wallets found.",
-                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(9)).pack(pady=20)
+            frm = tk.Frame(inner, bg=BG_WHITE)
+            frm.pack(expand=True, pady=30)
+            ico = _load_img("navi_wallet.png", 40, 40, self._imgs)
+            if ico:
+                tk.Label(frm, image=ico, bg=BG_WHITE).pack(pady=(0, 8))
+            tk.Label(frm, text="No wallets yet", bg=BG_WHITE,
+                     fg=TEXT_DARK, font=font(10, "bold")).pack()
+            tk.Label(frm, text="Create your first wallet to start tracking",
+                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(8)).pack(pady=(4, 0))
         else:
-            for i, (name, balance) in enumerate(wallets):
-                color = WALLET_COLORS[i % len(WALLET_COLORS)]
-                self._wallet_card(inner, name, balance, color, wallet_img)
+            for folder in wallets:
+                self._wallet_card(inner, folder, wallet_img)
 
-    def _wallet_card(self, parent, name, balance, color, wallet_img):
+    def _wallet_card(self, parent, folder, wallet_img):
+        name          = folder.get("name", "—")
+        budget        = float(folder.get("budget", 0))
+        total_income  = float(folder.get("total_income", 0))
+        total_expense = float(folder.get("total_expenses", 0))
+        used          = total_expense
+        progress      = min((used / budget * 100) if budget > 0 else 0, 100)
+
+        # show month only — strip " – WalletName" suffix if present
+        month_only = name.split(" – ")[0].strip() if " – " in name else name
+
         card = tk.Frame(parent, bg=BG_WHITE,
                         highlightbackground="#F0E6D5",
                         highlightthickness=1,
                         padx=14, pady=12)
         card.pack(fill="x", pady=5, padx=4)
 
+        # icon
         icon_f = tk.Frame(card, bg=BG_WHITE)
         icon_f.pack(side="left", padx=(0, 12))
         if wallet_img:
             tk.Label(icon_f, image=wallet_img, bg=BG_WHITE).pack()
-        else:
-            tk.Frame(icon_f, bg=color, width=50, height=44).pack()
 
+        # details
         det = tk.Frame(card, bg=BG_WHITE)
         det.pack(side="left", fill="x", expand=True)
 
-        tk.Label(det, text=name, bg=BG_WHITE,
-                 fg=TEXT_DARK, font=font(9, "semibold"),
-                 anchor="w").pack(anchor="w")
-        tk.Label(det, text="Balance", bg=BG_WHITE,
-                 fg="#777777", font=font(8, "medium"),
-                 anchor="w").pack(anchor="w")
+        # month name only
+        tk.Label(det, text=month_only, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(9, "bold"), anchor="w").pack(anchor="w")
 
-        pb_frame = tk.Frame(det, bg="#F1F1F1", height=8)
-        pb_frame.pack(fill="x", pady=(6, 4))
-        pb_frame.pack_propagate(False)
+        # "Budget Used" label
+        tk.Label(det, text="Budget Used", bg=BG_WHITE,
+                 fg=TEXT_MUTED, font=font(7), anchor="w").pack(anchor="w", pady=(3, 0))
 
-        def _draw_bar(event, bal=balance, frm=pb_frame, c=color):
+        # progress bar
+        pb_outer = tk.Frame(det, bg="#F1F1F1", height=7)
+        pb_outer.pack(fill="x", pady=(3, 0))
+        pb_outer.pack_propagate(False)
+
+        def _draw_bar(event, pct=progress, frm=pb_outer):
             w = frm.winfo_width()
             if w < 4:
                 return
-            pct = min(max(bal / 50000, 0), 1) if bal > 0 else 0
-            fill_w = int(w * pct)
+            fill_w = int(w * pct / 100)
             for child in frm.winfo_children():
                 child.destroy()
             if fill_w > 0:
-                tk.Frame(frm, bg=c, width=fill_w, height=8).place(x=0, y=0)
+                color = "#E59E2C" if pct < 90 else "#C62828"
+                tk.Frame(frm, bg=color, width=fill_w, height=7).place(x=0, y=0)
 
-        pb_frame.bind("<Configure>", _draw_bar)
+        pb_outer.bind("<Configure>", _draw_bar)
 
-        tk.Label(det, text=f"₱{balance:,.2f}", bg=BG_WHITE,
-                 fg=color, font=font(10, "semibold"),
-                 anchor="w").pack(anchor="w")
+        # "Php used / Php budget" right-aligned, just below the progress bar
+        used_str   = f"Php {used:,.0f}"
+        budget_str = f"Php {budget:,.0f}"
+        tk.Label(det, text=f"{used_str} / {budget_str}",
+                 bg=BG_WHITE, fg="#616161", font=font(7),
+                 anchor="e").pack(fill="x", pady=(2, 4))
+
+        # income / expense stats row
+        stats = tk.Frame(det, bg=BG_WHITE)
+        stats.pack(anchor="w")
+        tk.Label(stats, text=f"Income: Php {total_income:,.2f}",
+                 bg=BG_WHITE, fg="#2E7D32", font=font(7)).pack(side="left", padx=(0, 10))
+        tk.Label(stats, text=f"Expenses: Php {total_expense:,.2f}",
+                 bg=BG_WHITE, fg="#C62828", font=font(7)).pack(side="left")
 
     # ── Transaction History panel ─────────────────────────────────────
     def _build_history(self, parent, transactions):
@@ -318,7 +368,8 @@ class HomeScreen(tk.Frame):
         inner = tk.Frame(canvas, bg=BG_WHITE)
         inner.bind("<Configure>",
                    lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -334,43 +385,74 @@ class HomeScreen(tk.Frame):
                     if e.widget is canvas else None)
 
         if not transactions:
-            tk.Label(inner, text="No transactions yet.",
-                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(9)).pack(pady=20)
+            frm = tk.Frame(inner, bg=BG_WHITE)
+            frm.pack(expand=True, pady=30)
+            ico = _load_img("navi_history.png", 40, 40, self._imgs)
+            if ico:
+                tk.Label(frm, image=ico, bg=BG_WHITE).pack(pady=(0, 8))
+            tk.Label(frm, text="No transactions yet", bg=BG_WHITE,
+                     fg=TEXT_DARK, font=font(10, "bold")).pack()
+            tk.Label(frm, text="Your transaction history will appear here",
+                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(8)).pack(pady=(4, 0))
             return
 
+        wallet_map = self._data.get("wallet_map", {})
         for t in transactions:
-            date = t.get("date_issued", "")[:10]
-            desc = t.get("description") or t.get("particulars") or "—"
-            amt  = t["price"] * t["quantity"]
-            kind = t["kind"]
-            if kind == "expense":
-                amt = -amt
-            cat = t.get("income_type") or t.get("particulars") or kind.capitalize()
-            self._tx_item(inner, date, desc, cat, amt)
+            self._tx_item(inner, t, wallet_map)
 
-    def _tx_item(self, parent, date, desc, cat, amount):
-        item = tk.Frame(parent, bg=BG_WHITE,
+    def _tx_item(self, parent, t, wallet_map=None):
+        """Same card format as wallet screen _tx_item."""
+        date  = t.get("date_issued", "")[:10]
+        desc  = t.get("description") or "—"
+        qty   = t.get("quantity", 1)
+        price = t.get("price", 0)
+        total = qty * price
+        amt   = total if t["kind"] == "income" else -total
+        qty_line = f"{price:,.2f} x {qty} ({total:,.2f})"
+
+        # wallet name as the "month label" header (since home shows across wallets)
+        if wallet_map:
+            header = wallet_map.get(t.get("wallet_id"), "")
+        else:
+            header = ""
+
+        try:
+            month_label = datetime.strptime(date, "%Y-%m-%d").strftime("%B").upper()
+        except Exception:
+            month_label = date
+
+        card = tk.Frame(parent, bg=BG_WHITE,
                         highlightbackground="#ECDDC6",
-                        highlightthickness=1,
-                        padx=12, pady=10)
-        item.pack(fill="x", pady=4, padx=4)
+                        highlightthickness=1, padx=14, pady=10)
+        card.pack(fill="x", pady=4, padx=4)
+        card.bind("<Enter>", lambda e: card.config(highlightbackground="#E59E2C"))
+        card.bind("<Leave>", lambda e: card.config(highlightbackground="#ECDDC6"))
 
-        info = tk.Frame(item, bg=BG_WHITE)
-        info.pack(side="left", fill="x", expand=True)
+        left = tk.Frame(card, bg=BG_WHITE)
+        left.pack(side="left", fill="x", expand=True)
 
-        tk.Label(info, text=desc, bg=BG_WHITE,
-                 fg=TEXT_DARK, font=font(9, "semibold"),
-                 anchor="w").pack(anchor="w")
-        tk.Label(info, text=cat, bg=BG_WHITE,
-                 fg=TEXT_MUTED, font=font(8),
-                 anchor="w").pack(anchor="w")
-        tk.Label(info, text=date, bg=BG_WHITE,
-                 fg="#999999", font=font(7),
-                 anchor="w").pack(anchor="w")
+        if t["kind"] == "income":
+            income_type = t.get("income_type") or "—"
+            tk.Label(left, text=month_label, bg=BG_WHITE, fg=TEXT_DARK,
+                     font=font(9, "bold"), anchor="w").pack(anchor="w")
+            tk.Label(left, text=f"{qty_line}  ·  {income_type}  ·  {desc}",
+                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(8), anchor="w").pack(anchor="w")
+        else:
+            particulars = t.get("particulars") or "—"
+            tk.Label(left, text=month_label, bg=BG_WHITE, fg=TEXT_DARK,
+                     font=font(9, "bold"), anchor="w").pack(anchor="w")
+            tk.Label(left, text=f"{qty_line}  ·  {particulars}  ·  {desc}",
+                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(8), anchor="w").pack(anchor="w")
 
-        color = INCOME_GREEN if amount >= 0 else EXPENSE_RED
-        sign  = "+" if amount >= 0 else "-"
-        tk.Label(item,
-                 text=f"{sign}₱{abs(amount):,.2f}",
+        # wallet name as a small tag below
+        if header:
+            tk.Label(left, text=header, bg=BG_WHITE, fg="#999999",
+                     font=font(7), anchor="w").pack(anchor="w")
+        tk.Label(left, text=date, bg=BG_WHITE, fg="#999999",
+                 font=font(7), anchor="w").pack(anchor="w")
+
+        color = INCOME_GREEN if amt >= 0 else EXPENSE_RED
+        sign  = "+" if amt >= 0 else "-"
+        tk.Label(card, text=f"{sign}₱{abs(amt):,.2f}",
                  bg=BG_WHITE, fg=color,
-                 font=font(10, "semibold")).pack(side="right")
+                 font=font(10, "bold")).pack(side="right", anchor="center")
