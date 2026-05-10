@@ -4,6 +4,7 @@ from constants import *
 from datetime import datetime
 from db import get_home_data
 from PIL import Image, ImageTk
+import os as _os
 
 WALLET_COLORS = ["#A25517", "#C4872A", "#4CAF79", "#9B6FCF", "#4AA8D8", "#E05C5C"]
 _ASSETS = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "assets", "images")
@@ -58,6 +59,10 @@ class HomeScreen(tk.Frame):
         self.update()
         try:
             self._data = get_home_data(self._org.get("id"))
+            # fetch profile para makuha ang org_short_name
+            from db import get_profile
+            profile = get_profile(self._org.get("id"))
+            self._org["org_short_name"] = profile.get("org_short_name") or ""
         except Exception:
             self._data = {"total_balance": 0, "total_wallets": 0,
                           "income_month": 0, "expense_month": 0,
@@ -68,7 +73,8 @@ class HomeScreen(tk.Frame):
     # ── main render ───────────────────────────────────────────────────
     def _render(self):
         d        = self._data
-        org_name = self._org.get("org_name", "Organization")
+        org_name = (self._org.get("org_short_name") or 
+            self._org.get("org_name", "Organization"))
         date_str = datetime.now().strftime("%A, %B %d, %Y")
         now      = datetime.now()
         month_lbl = now.strftime("%B")

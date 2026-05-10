@@ -64,15 +64,15 @@ def _img_rounded(name, w, h, radius, cache):
 
 
 class WalletScreen(tk.Frame):
-    def __init__(self, parent, org=None, **kwargs):
+    def __init__(self, parent, org=None, search_query="", **kwargs):
         super().__init__(parent, bg=BG_CREAM, **kwargs)
-        self._org   = org or {}
-        self._imgs  = []
-        self._view  = "list"          # "list" | "detail"
-        self._wallet = None           # selected wallet dict
+        self._org          = org or {}
+        self._imgs         = []
+        self._view         = "list"
+        self._wallet       = None
+        self._init_query   = search_query
         self._build()
 
-    # ── Shared pill-button factory (same smooth rounding as sidebar) ──
     def _make_pill_btn(self, parent, text, bg_hex, hover_hex,
                        fg="white", width=None, height=36,
                        font_spec=None, side=None, padx=0, pady=0,
@@ -275,7 +275,13 @@ class WalletScreen(tk.Frame):
         self._search_var.trace_add("write", lambda *_: self._apply_filters())
         self._year_var.trace_add("write",   lambda *_: self._apply_filters())
 
-        # initial render
+    
+        if self._init_query:
+            self._search_var.set(self._init_query)
+            search.delete(0, "end")
+            search.insert(0, self._init_query)
+            search.config(fg=TEXT_DARK)
+            self._init_query = ""
         self._apply_filters()
 
     def _apply_filters(self):

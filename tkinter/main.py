@@ -113,6 +113,15 @@ class PockiTrackApp(tk.Tk):
                              on_back=lambda: self._show("login")).pack(
                 fill="both", expand=True)
 
+        elif screen_name == "change_password":
+            self._hide_sidebar()
+            from screens.change_password_screen import ChangePasswordScreen
+            ChangePasswordScreen(
+                self._content,
+            org=self._org,
+            on_success=lambda: self._show("home")
+        ).pack(fill="both", expand=True)
+            
         elif screen_name == "home":
             self._show_sidebar("home")
             HomeScreen(self._content, org=self._org).pack(fill="both", expand=True)
@@ -123,7 +132,9 @@ class PockiTrackApp(tk.Tk):
 
         elif screen_name == "wallet":
             self._show_sidebar("wallet")
-            WalletScreen(self._content, org=self._org).pack(fill="both", expand=True)
+            query = getattr(self, "_search_query", "")
+            self._search_query = ""  # clear after use
+            WalletScreen(self._content, org=self._org, search_query=query).pack(fill="both", expand=True)
 
         elif screen_name == "profile":
             self._show_sidebar("profile")
@@ -142,7 +153,16 @@ class PockiTrackApp(tk.Tk):
     def _post_login(self, org):
         self._logged_in = True
         self._org = org
-        self._show("home")
+        try:
+            from db import get_profile
+            profile = get_profile(org.get("id"))
+            self._org["org_short_name"] = profile.get("org_short_name") or ""
+        except Exception:
+            pass
+        if org.get("must_change_password"):
+            self._show("change_password")
+        else:
+            self._show("home")
 
     def _show_sidebar(self, screen_name=None):
         if self._sidebar is None:
@@ -215,9 +235,11 @@ class PockiTrackApp(tk.Tk):
             return ph
 
         # ─── Profile pill ────────────────────────────────────────────
-        org_name = (self._org or {}).get("org_name", "") if self._org else ""
+        org_name = ""
+        if self._org:
+            org_name = (self._org.get("org_short_name") or 
+                        self._org.get("org_name", ""))
 
-        # build a temporary hidden frame to measure required width
         _measure = tk.Frame(bar, bg=WHITE)
         av_size  = 26
         _av_tmp  = tk.Canvas(_measure, width=av_size, height=av_size,
@@ -321,7 +343,14 @@ class PockiTrackApp(tk.Tk):
             _redraw_srch(WHITE, BORDER)
         search_entry.bind("<FocusIn>",  _focus_in)
         search_entry.bind("<FocusOut>", _focus_out)
-        search_entry.bind("<Return>", lambda e: self._show("wallet"))
+        def _do_search(e=None):
+            query = search_entry.get().strip()
+            if query == "Search wallets...":
+                query = ""
+            self._search_query = query
+            self._show("wallet")
+
+        search_entry.bind("<Return>", _do_search)
 
         srch_cv.bind("<Configure>", lambda e: _redraw_srch())
         bar.after(50, _redraw_srch)

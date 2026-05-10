@@ -58,13 +58,49 @@ class Sidebar(tk.Frame):
         if ph:
             self._imgs.append(ph)
 
-        frm = tk.Frame(self, bg=_BG, pady=14, padx=14)
+        frm = tk.Frame(self, bg=_BG, pady=14, padx=14, cursor="hand2")
         frm.pack(fill="x")
 
+    # Container para sa hover effect
+        logo_container = tk.Frame(frm, bg=_BG, padx=6, pady=4, cursor="hand2")
+        logo_container.pack(side="left")
+
         if ph:
-            tk.Label(frm, image=ph, bg=_BG).pack(side="left")
-        tk.Label(frm, text="PockiTrack", bg=_BG,
-                 fg="#000000", font=font(17, "medium")).pack(side="left", padx=(8, 0))
+            logo_lbl = tk.Label(logo_container, image=ph, bg=_BG, cursor="hand2")
+            logo_lbl.pack(side="left")
+        
+        title_lbl = tk.Label(logo_container, text="PockiTrack", bg=_BG,
+                fg="#000000", font=font(17, "medium"), cursor="hand2")
+        title_lbl.pack(side="left", padx=(8, 0))
+
+    # Hover + click effects
+        def _on_enter(e):
+            logo_container.config(bg=_NAV_HOVER)
+            if ph:
+                logo_lbl.config(bg=_NAV_HOVER)
+            title_lbl.config(bg=_NAV_HOVER)
+
+        def _on_leave(e):
+            logo_container.config(bg=_BG)
+            if ph:
+                logo_lbl.config(bg=_BG)
+            title_lbl.config(bg=_BG)
+
+        def _on_press(e):
+            logo_container.config(bg="#D4C3A3")
+            if ph:
+                logo_lbl.config(bg="#D4C3A3")
+            title_lbl.config(bg="#D4C3A3")
+
+        def _on_release(e):
+            _on_enter(e)
+            self._on_nav("home")
+
+        for w in (logo_container, title_lbl) + ((logo_lbl,) if ph else ()):
+            w.bind("<Enter>",          _on_enter)
+            w.bind("<Leave>",          _on_leave)
+            w.bind("<ButtonPress-1>",  _on_press)
+            w.bind("<ButtonRelease-1>", _on_release)
 
     # ── Nav items ─────────────────────────────────────────────────────
     def _build_nav(self):

@@ -18,6 +18,13 @@ def login_organization(username: str, password: str):
         raise ValueError("Incorrect password.")
     return org
 
+def change_password(org_id: int, new_password: str) -> None:
+    from werkzeug.security import generate_password_hash
+    hashed = generate_password_hash(new_password)
+    _sb.table("organizations").update({
+        "password": hashed,
+        "must_change_password": False,
+    }).eq("id", org_id).execute()
 
 def get_home_data(org_id: int) -> dict:
 
