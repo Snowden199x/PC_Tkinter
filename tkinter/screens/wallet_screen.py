@@ -143,7 +143,7 @@ class WalletScreen(tk.Frame):
 
     # ── outer scaffold ────────────────────────────────────────────────
     def _build(self):
-        outer = tk.Frame(self, bg=BG_CREAM, padx=20, pady=16)
+        outer = tk.Frame(self, bg=BG_CREAM, padx=12, pady=16)
         outer.pack(fill="both", expand=True)
 
         box_canvas = tk.Canvas(outer, bg=BG_CREAM, bd=0, highlightthickness=0)

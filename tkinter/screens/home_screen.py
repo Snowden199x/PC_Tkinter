@@ -77,8 +77,8 @@ class HomeScreen(tk.Frame):
         month_lbl = now.strftime("%B")
 
         # ── white content box ────────────────────────────────────────────────────
-        outer = tk.Frame(self, bg=BG_CREAM, padx=20, pady=16)
-        outer.pack(fill="both", expand=True)
+        outer = tk.Frame(self, bg=BG_CREAM)
+        outer.pack(fill="both", expand=True, padx=12, pady=(0, 16))
 
         box_canvas = tk.Canvas(outer, bg=BG_CREAM, bd=0, highlightthickness=0)
         box_canvas.pack(fill="both", expand=True)

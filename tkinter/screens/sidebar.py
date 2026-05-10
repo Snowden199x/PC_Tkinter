@@ -54,7 +54,7 @@ class Sidebar(tk.Frame):
     # ── Logo ─────────────────────────────────────────────────────────
     def _build_logo(self):
         logo_path = _os.path.join(BASE_DIR, "pocki_logo.png")
-        ph = _load(logo_path, 44, 44)
+        ph = _load(logo_path, 54, 54)
         if ph:
             self._imgs.append(ph)
 
@@ -64,12 +64,12 @@ class Sidebar(tk.Frame):
         if ph:
             tk.Label(frm, image=ph, bg=_BG).pack(side="left")
         tk.Label(frm, text="PockiTrack", bg=_BG,
-                 fg="#000000", font=font(14, "bold")).pack(side="left", padx=(8, 0))
+                 fg="#000000", font=font(17, "medium")).pack(side="left", padx=(8, 0))
 
     # ── Nav items ─────────────────────────────────────────────────────
     def _build_nav(self):
         self._nav_frame = tk.Frame(self, bg=_BG, padx=10)
-        self._nav_frame.pack(fill="x", pady=(10, 0))
+        self._nav_frame.pack(fill="x", pady=(30, 0))
 
         for key, label, icon_file in NAV_ITEMS:
             icon_path = _os.path.join(ASSETS_DIR, icon_file)
@@ -111,10 +111,10 @@ class Sidebar(tk.Frame):
     def _make_pill(self, parent, key, label, ico_dark, ico_white):
         # outer frame (cream bg, full width)
         outer = tk.Frame(parent, bg=_BG, cursor="hand2")
-        outer.pack(fill="x", pady=4)
+        outer.pack(fill="x", pady=2)
 
         # pill canvas — rounded highlight background
-        pill = tk.Canvas(outer, bg=_BG, height=46,
+        pill = tk.Canvas(outer, bg=_BG, height=38,
                          bd=0, highlightthickness=0)
         pill.pack(fill="x")
         pill.bind("<Configure>",
