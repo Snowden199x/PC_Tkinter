@@ -47,8 +47,19 @@ class PockiTrackApp(tk.Tk):
         self._sidebar_slot.pack_propagate(False)
 
         self._sidebar = None
-        self._content = tk.Frame(self._shell, bg=BG_CREAM)
-        self._content.pack(side="left", fill="both", expand=True)
+
+        # Right side: top bar + content stacked vertically
+        self._right = tk.Frame(self._shell, bg=BG_CREAM)
+        self._right.pack(side="left", fill="both", expand=True)
+
+        # Top bar (hidden until login)
+        self._topbar_frame = tk.Frame(self._right, bg=BG_CREAM, height=0)
+        self._topbar_frame.pack(side="top", fill="x")
+        self._topbar_frame.pack_propagate(False)
+        self._topbar = None
+
+        self._content = tk.Frame(self._right, bg=BG_CREAM)
+        self._content.pack(side="top", fill="both", expand=True)
 
         # Start on the start screen
         self._show("start")
@@ -103,19 +114,19 @@ class PockiTrackApp(tk.Tk):
                 fill="both", expand=True)
 
         elif screen_name == "home":
-            self._show_sidebar()
+            self._show_sidebar("home")
             HomeScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "history":
-            self._show_sidebar()
+            self._show_sidebar("history")
             HistoryScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "wallet":
-            self._show_sidebar()
+            self._show_sidebar("wallet")
             WalletScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "profile":
-            self._show_sidebar()
+            self._show_sidebar("profile")
             ProfileScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "logout":
@@ -133,12 +144,17 @@ class PockiTrackApp(tk.Tk):
         self._org = org
         self._show("home")
 
-    def _show_sidebar(self):
+    def _show_sidebar(self, screen_name=None):
         if self._sidebar is None:
             self._sidebar = Sidebar(self._sidebar_slot,
                                     on_navigate=self._show)
             self._sidebar.pack(fill="both", expand=True)
             self._sidebar_slot.config(width=SIDEBAR_W)
+        # Only show topbar on home screen
+        if screen_name == "home":
+            self._show_topbar()
+        else:
+            self._hide_topbar()
 
     def _hide_sidebar(self):
         if self._sidebar:
@@ -146,6 +162,204 @@ class PockiTrackApp(tk.Tk):
             self._sidebar.destroy()
             self._sidebar = None
             self._sidebar_slot.config(width=0)
+        self._hide_topbar()
+
+    # ── Top bar ───────────────────────────────────────────────────────
+    def _show_topbar(self):
+        if self._topbar is not None:
+            return   # already built
+        self._topbar_frame.config(height=52)
+        self._topbar = self._build_topbar(self._topbar_frame)
+
+    def _hide_topbar(self):
+        if self._topbar:
+            self._topbar.destroy()
+            self._topbar = None
+        self._topbar_frame.config(height=0)
+
+    def _build_topbar(self, parent):
+        from PIL import Image, ImageTk, ImageDraw
+        import os as _os
+
+        bar = tk.Frame(parent, bg=BG_CREAM)
+        bar.pack(fill="both", expand=True, padx=12, pady=(6, 0))
+
+        assets = _os.path.join(BASE_DIR, "assets", "images")
+        _imgs  = []   # keep PhotoImage refs alive
+
+        PILL_H  = 38
+        RADIUS  = 19   # fully pill-shaped
+        WHITE   = "#FFFFFF"
+        BORDER  = "#ECDDC6"
+        HOVER_F = "#FFF7EC"
+        HOVER_B = "#E59E2C"
+
+        def _make_pill_image(w, h, fill, border, radius):
+            scale = 4
+            sw, sh, r = w * scale, h * scale, radius * scale
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            # border ring
+            br = int(border.lstrip("#"), 16)
+            draw.rounded_rectangle([0, 0, sw-1, sh-1], radius=r,
+                                   fill=((br>>16)&255,(br>>8)&255,br&255,255))
+            # fill inset by 1 real pixel
+            s = scale
+            fr = int(fill.lstrip("#"), 16)
+            draw.rounded_rectangle([s, s, sw-1-s, sh-1-s],
+                                   radius=max(r-s, 0),
+                                   fill=((fr>>16)&255,(fr>>8)&255,fr&255,255))
+            img = img.resize((w, h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            _imgs.append(ph)
+            return ph
+
+        # ─── Profile pill ────────────────────────────────────────────
+        org_name = (self._org or {}).get("org_name", "") if self._org else ""
+
+        # build a temporary hidden frame to measure required width
+        _measure = tk.Frame(bar, bg=WHITE)
+        av_size  = 26
+        _av_tmp  = tk.Canvas(_measure, width=av_size, height=av_size,
+                             bg=WHITE, bd=0, highlightthickness=0)
+        _av_tmp.pack(side="left", padx=(10, 0))
+        _nm_tmp  = tk.Label(_measure, text=org_name, bg=WHITE,
+                            font=("Poppins", 9, "bold"), padx=6)
+        _nm_tmp.pack(side="left")
+        _cr_tmp  = tk.Label(_measure, text="▼", bg=WHITE,
+                            font=("Poppins", 7), padx=0)
+        _cr_tmp.pack(side="left", padx=(0, 10))
+        bar.update_idletasks()
+        pill_w = _measure.winfo_reqwidth()
+        _measure.destroy()
+
+        pill_cv = tk.Canvas(bar, width=pill_w, height=PILL_H,
+                            bg=BG_CREAM, bd=0, highlightthickness=0,
+                            cursor="hand2")
+        pill_cv.pack(side="right")
+
+        def _redraw_pill(fill=WHITE, border=BORDER):
+            w = pill_cv.winfo_width() or pill_w
+            ph = _make_pill_image(w, PILL_H, fill, border, RADIUS)
+            pill_cv.delete("pill_bg")
+            pill_cv.create_image(0, 0, anchor="nw", image=ph, tags="pill_bg")
+            pill_cv.tag_lower("pill_bg")
+
+        # avatar canvas embedded in pill
+        av_cv = tk.Canvas(pill_cv, width=av_size, height=av_size,
+                          bg=WHITE, bd=0, highlightthickness=0)
+        pill_cv.create_window(10, PILL_H//2, anchor="w", window=av_cv)
+
+        def _draw_avatar():
+            av_cv.delete("all")
+            av_cv.create_oval(0, 0, av_size, av_size, fill="#ECDDC6", outline="")
+            default = _os.path.join(assets, "default_avatar.png")
+            if _os.path.exists(default):
+                try:
+                    img = Image.open(default).resize(
+                        (av_size, av_size), Image.LANCZOS).convert("RGBA")
+                    bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
+                    mask = Image.new("L",    (av_size, av_size), 0)
+                    ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
+                    bg.paste(img, mask=mask)
+                    ph = ImageTk.PhotoImage(bg.convert("RGB"))
+                    _imgs.append(ph)
+                    av_cv._ph = ph
+                    av_cv.create_image(av_size//2, av_size//2,
+                                       image=ph, anchor="center")
+                except Exception:
+                    pass
+        _draw_avatar()
+
+        name_lbl = tk.Label(pill_cv, text=org_name, bg=WHITE,
+                            fg=TEXT_DARK, font=("Poppins", 9, "bold"))
+        pill_cv.create_window(10 + av_size + 6, PILL_H//2,
+                              anchor="w", window=name_lbl)
+
+        caret_lbl = tk.Label(pill_cv, text="▼", bg=WHITE,
+                             fg="#828282", font=("Poppins", 7))
+        pill_cv.create_window(pill_w - 10, PILL_H//2,
+                              anchor="e", window=caret_lbl)
+
+        pill_cv.bind("<Configure>", lambda e: _redraw_pill())
+        bar.after(50, _redraw_pill)   # draw after layout settles
+
+        # ─── Search bar ──────────────────────────────────────────────
+        SRCH_W = 220
+
+        srch_cv = tk.Canvas(bar, width=SRCH_W, height=PILL_H,
+                            bg=BG_CREAM, bd=0, highlightthickness=0)
+        srch_cv.pack(side="right", padx=(0, 8))
+
+        def _redraw_srch(fill=WHITE, border=BORDER):
+            w = srch_cv.winfo_width() or SRCH_W
+            ph = _make_pill_image(w, PILL_H, fill, border, RADIUS)
+            srch_cv.delete("srch_bg")
+            srch_cv.create_image(0, 0, anchor="nw", image=ph, tags="srch_bg")
+            srch_cv.tag_lower("srch_bg")
+
+        icon_lbl = tk.Label(srch_cv, text="🔍", bg=WHITE,
+                            fg="#9A8070", font=("Poppins", 9))
+        srch_cv.create_window(12, PILL_H//2, anchor="w", window=icon_lbl)
+
+        search_entry = tk.Entry(srch_cv, font=("Poppins", 9),
+                                bd=0, relief="flat", bg=WHITE,
+                                fg="#616161", width=16,
+                                insertbackground=TEXT_DARK)
+        search_entry.insert(0, "Search wallets...")
+        srch_cv.create_window(38, PILL_H//2, anchor="w", window=search_entry)
+
+        def _focus_in(e):
+            if search_entry.get() == "Search wallets...":
+                search_entry.delete(0, "end")
+                search_entry.config(fg=TEXT_DARK)
+            _redraw_srch(WHITE, HOVER_B)
+        def _focus_out(e):
+            if not search_entry.get():
+                search_entry.insert(0, "Search wallets...")
+                search_entry.config(fg="#616161")
+            _redraw_srch(WHITE, BORDER)
+        search_entry.bind("<FocusIn>",  _focus_in)
+        search_entry.bind("<FocusOut>", _focus_out)
+        search_entry.bind("<Return>", lambda e: self._show("wallet"))
+
+        srch_cv.bind("<Configure>", lambda e: _redraw_srch())
+        bar.after(50, _redraw_srch)
+
+        # ─── Dropdown ────────────────────────────────────────────────
+        drop = tk.Frame(self, bg=WHITE,
+                        highlightbackground=BORDER, highlightthickness=1)
+        drop._open = False
+
+        for txt, action in [("Profile", lambda: self._show("profile")),
+                             ("Logout",  lambda: self._show("logout"))]:
+            item = tk.Label(drop, text=txt, bg=WHITE, fg=TEXT_DARK,
+                            font=("Poppins", 9), padx=16, pady=8,
+                            anchor="w", cursor="hand2")
+            item.pack(fill="x")
+            item.bind("<Enter>", lambda e, b=item: b.config(bg="#F5F1E8"))
+            item.bind("<Leave>", lambda e, b=item: b.config(bg=WHITE))
+            item.bind("<Button-1>", lambda e, a=action: (
+                drop.place_forget(), setattr(drop, "_open", False), a()))
+
+        def _toggle_drop(e=None):
+            if drop._open:
+                drop.place_forget()
+                drop._open = False
+            else:
+                self.update_idletasks()
+                px = pill_cv.winfo_rootx() - self.winfo_rootx()
+                py = pill_cv.winfo_rooty() - self.winfo_rooty() + PILL_H + 2
+                drop.place(x=px, y=py, width=max(pill_cv.winfo_width(), 160))
+                drop.lift()
+                drop._open = True
+
+        for w in (pill_cv, av_cv, name_lbl, caret_lbl):
+            w.bind("<Button-1>", _toggle_drop)
+            w.bind("<Enter>",    lambda e: _redraw_pill(HOVER_F, HOVER_B))
+            w.bind("<Leave>",    lambda e: _redraw_pill(WHITE,   BORDER))
+
+        return bar
 
 
 if __name__ == "__main__":
