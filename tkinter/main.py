@@ -28,7 +28,16 @@ class PockiTrackApp(tk.Tk):
         self.geometry(f"{WINDOW_W}x{WINDOW_H}")
         self.resizable(True, True)
         self.configure(bg=BG_CREAM)
-
+    # Set window icon
+        try:
+            from PIL import Image, ImageTk
+            icon_path = os.path.join(BASE_DIR, "assets", "images", "pocki_logo.png")
+            icon_img = Image.open(icon_path).resize((32, 32), Image.LANCZOS)
+            icon_photo = ImageTk.PhotoImage(icon_img)
+            self.iconphoto(True, icon_photo)
+            self._icon = icon_photo
+        except Exception:
+            pass
         # ── Load Poppins if available ─────────────────────────────────
         self._try_load_poppins()
 
@@ -141,14 +150,18 @@ class PockiTrackApp(tk.Tk):
             ProfileScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "logout":
-            self._hide_sidebar()
             self._logged_in = False
+            self._org = None
+            self._hide_sidebar()
             self._show("start")
+            return
 
         self._current = screen_name
-        if self._sidebar and screen_name in (
-                "home", "history", "wallet", "profile"):
-            self._sidebar.set_active(screen_name)
+        # Re-apply window icon after every screen change
+        try:
+            self.iconphoto(True, self._icon)
+        except Exception:
+            pass
 
     def _post_login(self, org):
         self._logged_in = True
@@ -166,11 +179,11 @@ class PockiTrackApp(tk.Tk):
 
     def _show_sidebar(self, screen_name=None):
         if self._sidebar is None:
+            self._sidebar_slot.pack(side="left", fill="y")
+            self._sidebar_slot.config(width=SIDEBAR_W)
             self._sidebar = Sidebar(self._sidebar_slot,
                                     on_navigate=self._show)
             self._sidebar.pack(fill="both", expand=True)
-            self._sidebar_slot.config(width=SIDEBAR_W)
-        # Only show topbar on home screen
         if screen_name == "home":
             self._show_topbar()
         else:
@@ -181,7 +194,10 @@ class PockiTrackApp(tk.Tk):
             self._sidebar.pack_forget()
             self._sidebar.destroy()
             self._sidebar = None
-            self._sidebar_slot.config(width=0)
+        self._sidebar_slot.config(width=0)
+        self._sidebar_slot.pack_forget()
+        self._right.pack_forget()
+        self._right.pack(side="left", fill="both", expand=True)
         self._hide_topbar()
 
     # ── Top bar ───────────────────────────────────────────────────────

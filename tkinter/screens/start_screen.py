@@ -258,7 +258,7 @@ class StartScreen(tk.Frame):
         lf = tk.Frame(hdr, bg=_BG, cursor="hand2")
         lf.pack(side="left")
 
-        logo_ico = self._img("pocki_logo.png", 64, base=True)
+        logo_ico = self._img("pocki_logo.png", 64)
         if logo_ico:
             logo_lbl = tk.Label(lf, image=logo_ico, bg=_BG, cursor="hand2")
             logo_lbl.pack(side="left")
@@ -562,13 +562,13 @@ class StartScreen(tk.Frame):
 
     # ── image loader ──────────────────────────────────────────────────
     def _img(self, filename, size, base=False):
-        path = _os.path.join(_BASE if base else _ASSETS, filename)
+        path = _os.path.join(_ASSETS, filename)
         if not _os.path.exists(path):
             return None
         try:
-            img = Image.open(path).resize((size, size), Image.LANCZOS)
-            ph  = ImageTk.PhotoImage(img)
-            self._imgs.append(ph)   # prevent GC
+            img = Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            self._imgs.append(ph)
             return ph
         except Exception:
             return None
