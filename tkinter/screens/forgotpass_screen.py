@@ -39,7 +39,7 @@ class ForgotPassScreen(tk.Frame):
             return None
 
     def _base_img(self, name, w=None, h=None):
-        path = os.path.join(BASE_DIR, name)
+        path = os.path.join(BASE_DIR, "assets", "images", name)
         if not os.path.exists(path):
             return None
         try:
@@ -69,6 +69,8 @@ class ForgotPassScreen(tk.Frame):
         tk.Label(logo_frame, text="PockiTrack",
                  font=("Poppins", 24, "bold"), bg=BG_COLOR).pack(side="left", padx=8)
         logo_frame.bind("<Button-1>", lambda e: self._on_back())
+        for child in logo_frame.winfo_children():
+            child.bind("<Button-1>", lambda e: self._on_back())
 
         # ── centered card ─────────────────────────────────────────────
         container = tk.Frame(self, bg=BG_COLOR)

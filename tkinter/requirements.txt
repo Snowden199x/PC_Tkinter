@@ -1,0 +1,7 @@
+supabase
+python-dotenv
+Pillow
+werkzeug
+httpx
+python-docx
+lxml

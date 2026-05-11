@@ -42,8 +42,8 @@ class LoginScreen(tk.Frame):
 
     # ---------- BASE IMAGE LOADER ----------
     def base_img(self, name, w=None, h=None):
-        """Load image from BASE_DIR (for pocki_logo.png)"""
-        path = os.path.join(BASE_DIR, name)
+        """Load image from assets/images/"""
+        path = os.path.join(BASE_DIR, "assets", "images", name)
         if not os.path.exists(path):
             return None
         try:

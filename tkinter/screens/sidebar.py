@@ -53,7 +53,7 @@ class Sidebar(tk.Frame):
 
     # ── Logo ─────────────────────────────────────────────────────────
     def _build_logo(self):
-        logo_path = _os.path.join(BASE_DIR, "pocki_logo.png")
+        logo_path = _os.path.join(BASE_DIR, "assets", "images", "pocki_logo.png")
         ph = _load(logo_path, 54, 54)
         if ph:
             self._imgs.append(ph)

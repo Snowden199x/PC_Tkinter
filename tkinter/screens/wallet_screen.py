@@ -21,7 +21,8 @@ def _sb_client():
     """Return the shared Supabase client from db.py."""
     return _db_module._sb
 
-_ASSETS      = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "assets", "images")
+from constants import BASE_DIR as _BASE_DIR
+_ASSETS = _os.path.join(_BASE_DIR, "assets", "images")
 _CARD_COLORS = ["#F3D58D","#D4E8C2","#C2D4E8","#E8C2D4","#D4C2E8","#C2E8D4","#E8D4C2"]
 _INCOME_CLR  = "#2E7D32"
 _EXPENSE_CLR = "#C62828"
@@ -1322,9 +1323,8 @@ class WalletScreen(tk.Frame):
             messagebox.showwarning("No Report", "No report found for this wallet.")
             return
 
-        template_path = _os.path.join(
-            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-            "assets", "template", "finance_report_template.docx")
+        from constants import BASE_DIR as _BASE_DIR
+        template_path = _os.path.join(_BASE_DIR, "assets", "template", "finance_report_template.docx")
 
         try:
             doc = Document(template_path)
@@ -1570,9 +1570,7 @@ class WalletScreen(tk.Frame):
         import base64
 
         def _img_b64(name):
-            path = _os.path.join(
-                _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-                "assets", "images", name)
+            path = _os.path.join(_BASE_DIR, "assets", "images", name)
             if not _os.path.exists(path):
                 return ""
             with open(path, "rb") as f:
@@ -2935,9 +2933,8 @@ class WalletScreen(tk.Frame):
         budget_id = arch["budget_id"]
         org_id    = self._org.get("id")
 
-        template_path = _os.path.join(
-            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-            "assets", "template", "finance_report_template.docx")
+        from constants import BASE_DIR as _BASE_DIR
+        template_path = _os.path.join(_BASE_DIR, "assets", "template", "finance_report_template.docx")
         try:
             doc = Document(template_path)
         except Exception as e:

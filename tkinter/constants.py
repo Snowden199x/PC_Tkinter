@@ -1,6 +1,12 @@
 import os
+import sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# PyInstaller-compatible BASE_DIR
+if getattr(sys, 'frozen', False):
+    BASE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 ASSETS_DIR = os.path.join(BASE_DIR, "assets", "images")
 
 # ── Colors ────────────────────────────────────────────────────────────────────
