@@ -89,9 +89,9 @@ class PockiTrackApp(tk.Tk):
     # ── Navigation ────────────────────────────────────────────────────
     def _show(self, screen_name):
         """Destroy current screen and show the requested one."""
-        # clear content area
         for w in self._content.winfo_children():
             w.destroy()
+        self.update_idletasks()
 
         if screen_name == "start":
             self._hide_sidebar()
@@ -187,7 +187,10 @@ class PockiTrackApp(tk.Tk):
     # ── Top bar ───────────────────────────────────────────────────────
     def _show_topbar(self):
         if self._topbar is not None:
-            return   # already built
+            old = self._topbar
+            self._topbar = None
+            old.destroy()
+            self.update_idletasks()
         self._topbar_frame.config(height=52)
         self._topbar = self._build_topbar(self._topbar_frame)
 
@@ -275,22 +278,52 @@ class PockiTrackApp(tk.Tk):
         def _draw_avatar():
             av_cv.delete("all")
             av_cv.create_oval(0, 0, av_size, av_size, fill="#ECDDC6", outline="")
-            default = _os.path.join(assets, "default_avatar.png")
-            if _os.path.exists(default):
-                try:
-                    img = Image.open(default).resize(
-                        (av_size, av_size), Image.LANCZOS).convert("RGBA")
-                    bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
-                    mask = Image.new("L",    (av_size, av_size), 0)
-                    ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
-                    bg.paste(img, mask=mask)
-                    ph = ImageTk.PhotoImage(bg.convert("RGB"))
-                    _imgs.append(ph)
-                    av_cv._ph = ph
-                    av_cv.create_image(av_size//2, av_size//2,
-                                       image=ph, anchor="center")
-                except Exception:
-                    pass
+
+            # Try to load profile photo from DB first
+            photo_img = None
+            try:
+                if self._org and self._org.get("id"):
+                    from db import get_profile
+                    profile = get_profile(self._org["id"])
+                    photo_url = profile.get("profile_photo_url", "")
+                    if photo_url:
+                        import urllib.request, io
+                        with urllib.request.urlopen(photo_url, timeout=5) as resp:
+                            data = resp.read()
+                        img = Image.open(io.BytesIO(data)).resize(
+                            (av_size, av_size), Image.LANCZOS).convert("RGBA")
+                        bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
+                        mask = Image.new("L",    (av_size, av_size), 0)
+                        ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
+                        bg.paste(img, mask=mask)
+                        ph = ImageTk.PhotoImage(bg.convert("RGB"))
+                        _imgs.append(ph)
+                        av_cv._ph = ph
+                        av_cv.create_image(av_size//2, av_size//2,
+                                        image=ph, anchor="center")
+                        photo_img = ph
+            except Exception:
+                pass
+
+            # Fallback to default_avatar.png
+            if photo_img is None:
+                default = _os.path.join(assets, "default_avatar.png")
+                if _os.path.exists(default):
+                    try:
+                        img = Image.open(default).resize(
+                            (av_size, av_size), Image.LANCZOS).convert("RGBA")
+                        bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
+                        mask = Image.new("L",    (av_size, av_size), 0)
+                        ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
+                        bg.paste(img, mask=mask)
+                        ph = ImageTk.PhotoImage(bg.convert("RGB"))
+                        _imgs.append(ph)
+                        av_cv._ph = ph
+                        av_cv.create_image(av_size//2, av_size//2,
+                                        image=ph, anchor="center")
+                    except Exception:
+                        pass
+
         _draw_avatar()
 
         name_lbl = tk.Label(pill_cv, text=org_name, bg=WHITE,

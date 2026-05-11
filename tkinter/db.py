@@ -459,7 +459,7 @@ def get_profile(org_id: int) -> dict:
     raw_path = profile.get("profile_photo_url") or ""
     if raw_path:
         try:
-            bucket = "profile-photos"
+            bucket = "profile_photo"
             public = _sb.storage.from_(bucket).get_public_url(raw_path)
             photo_url = public.get("publicUrl") if isinstance(public, dict) else (public or "")
         except Exception:
@@ -507,7 +507,7 @@ def update_profile(org_id: int, org_short_name: str = None, email: str = None) -
 def update_profile_photo(org_id: int, image_bytes: bytes, ext: str) -> str:
     """Upload photo to Supabase Storage and update profile_users. Returns public URL."""
     from uuid import uuid4
-    bucket = "profile-photos"
+    bucket = "profile_photo"
     path = f"orgs/{org_id}/org-{org_id}-{uuid4()}.{ext}"
     _sb.storage.from_(bucket).upload(path, image_bytes)
 

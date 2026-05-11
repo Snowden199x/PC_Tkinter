@@ -1115,14 +1115,13 @@ class WalletScreen(tk.Frame):
         yes_btn.bind("<Button-1>", _confirm)
 
     def _show_report_action_buttons(self, banner_canvas, already_submitted=False):
-        """Replace Generate button with Edit/Preview/Print/Submit buttons.
-        If already_submitted=True, remove all four buttons and show a single
-        hollow disabled 'Generate report' button — same pill as the original
-        but greyed out and not clickable."""
+        try:
+            banner_canvas.winfo_exists()
+        except Exception:
+            return
+        if not banner_canvas.winfo_exists():
+            return
         banner_canvas.delete("btn")
-        # also remove any leftover individual action button windows
-        for tag in ("btn_edit", "btn_preview", "btn_print", "btn_submit"):
-            banner_canvas.delete(tag)
 
         _btn_h = 36
 
@@ -2367,7 +2366,9 @@ class WalletScreen(tk.Frame):
         self._receipts_inner = inner   # keep ref for refresh after upload
 
         if not receipts:
-            self._empty(inner, "No receipts found.",
+            canvas.pack_forget()
+            sb.pack_forget()
+            self._empty(p, "No receipts found.",
                         "Use '+ Add → Add receipt' to upload one.")
             return
 
@@ -2429,20 +2430,100 @@ class WalletScreen(tk.Frame):
                     command=lambda rid=receipt_id: self._confirm_delete_receipt(rid))
 
     def _view_receipt(self, file_path):
-        """Fetch public URL and open in default browser."""
-        import threading, webbrowser
+        """Download receipt and show in-app image viewer overlay."""
+        import threading
         if not file_path:
             return
 
-        def _open():
+        def _fetch_and_show():
             try:
-                url = get_receipt_public_url(file_path)
-                if url:
-                    webbrowser.open(url)
-            except Exception:
-                pass
+                file_bytes = download_receipt_bytes(file_path)
+                self.after(0, lambda: self._show_receipt_overlay(file_bytes, file_path))
+            except Exception as e:
+                self.after(0, lambda: self._show_receipt_overlay(None, file_path, error=str(e)))
 
-        threading.Thread(target=_open, daemon=True).start()
+        threading.Thread(target=_fetch_and_show, daemon=True).start()
+
+    def _show_receipt_overlay(self, file_bytes, file_path, error=None):
+        """Show receipt image in an in-app overlay window."""
+        from io import BytesIO
+
+        root = self.winfo_toplevel()
+        root.update_idletasks()
+
+        overlay = tk.Frame(root, bg="black")
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+
+        # dark backdrop — click to close
+        backdrop = tk.Canvas(overlay, bg="#000000", bd=0, highlightthickness=0)
+        backdrop.place(relx=0, rely=0, relwidth=1, relheight=1)
+        backdrop.bind("<Button-1>", lambda e: overlay.destroy())
+
+        # modal card
+        card = tk.Frame(overlay, bg=BG_WHITE, padx=20, pady=16,
+                        highlightbackground="#E0D4C0", highlightthickness=1)
+        card.place(relx=0.5, rely=0.5, anchor="center",
+                   width=600, height=500)
+        card.bind("<Button-1>", lambda e: "break")
+
+        # header
+        hdr = tk.Frame(card, bg=BG_WHITE)
+        hdr.pack(fill="x", pady=(0, 10))
+        tk.Label(hdr, text="Receipt", bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(12, "bold")).pack(side="left")
+        close_btn = tk.Label(hdr, text="×", bg=BG_WHITE, fg="#616161",
+                             font=("Arial", 18), cursor="hand2")
+        close_btn.pack(side="right")
+        close_btn.bind("<Button-1>", lambda e: overlay.destroy())
+        close_btn.bind("<Enter>", lambda e: close_btn.config(fg=TEXT_DARK))
+        close_btn.bind("<Leave>", lambda e: close_btn.config(fg="#616161"))
+
+        tk.Frame(card, bg=_FILTER_BDR, height=1).pack(fill="x", pady=(0, 10))
+
+        # content area
+        content = tk.Frame(card, bg=BG_WHITE)
+        content.pack(fill="both", expand=True)
+
+        if error:
+            tk.Label(content, text=f"Could not load receipt:\n{error}",
+                     bg=BG_WHITE, fg="#C62828", font=font(9),
+                     justify="center").pack(expand=True)
+            return
+
+        # check if PDF
+        ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+        if ext == "pdf":
+            tk.Label(content,
+                     text="📄 PDF Receipt\n\nPDF preview not supported in-app.\nUse Download to save and open.",
+                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(10),
+                     justify="center").pack(expand=True)
+            return
+
+        # show image
+        try:
+            img = Image.open(BytesIO(file_bytes))
+            # fit to 560x420
+            img.thumbnail((560, 420), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+
+            canvas = tk.Canvas(content, bg=BG_WHITE, bd=0, highlightthickness=0)
+            canvas.pack(fill="both", expand=True)
+            canvas._ph = ph
+
+            def _place_img(event=None):
+                cw = canvas.winfo_width()
+                ch = canvas.winfo_height()
+                canvas.delete("all")
+                canvas.create_image(cw // 2, ch // 2, anchor="center", image=ph)
+
+            canvas.bind("<Configure>", _place_img)
+            canvas.bind("<Button-1>", lambda e: "break")
+
+        except Exception as e:
+            tk.Label(content, text=f"Cannot display image:\n{e}",
+                     bg=BG_WHITE, fg="#C62828", font=font(9),
+                     justify="center").pack(expand=True)
 
     def _download_receipt(self, file_path):
         """Fetch download URL and open it (browser triggers download)."""
