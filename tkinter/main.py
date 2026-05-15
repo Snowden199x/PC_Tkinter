@@ -28,7 +28,16 @@ class PockiTrackApp(tk.Tk):
         self.geometry(f"{WINDOW_W}x{WINDOW_H}")
         self.resizable(True, True)
         self.configure(bg=BG_CREAM)
-
+    # Set window icon
+        try:
+            from PIL import Image, ImageTk
+            icon_path = os.path.join(BASE_DIR, "assets", "images", "pocki_logo.png")
+            icon_img = Image.open(icon_path).resize((32, 32), Image.LANCZOS)
+            icon_photo = ImageTk.PhotoImage(icon_img)
+            self.iconphoto(True, icon_photo)
+            self._icon = icon_photo
+        except Exception:
+            pass
         # ── Load Poppins if available ─────────────────────────────────
         self._try_load_poppins()
 
@@ -89,9 +98,9 @@ class PockiTrackApp(tk.Tk):
     # ── Navigation ────────────────────────────────────────────────────
     def _show(self, screen_name):
         """Destroy current screen and show the requested one."""
-        # clear content area
         for w in self._content.winfo_children():
             w.destroy()
+        self.update_idletasks()
 
         if screen_name == "start":
             self._hide_sidebar()
@@ -113,6 +122,15 @@ class PockiTrackApp(tk.Tk):
                              on_back=lambda: self._show("login")).pack(
                 fill="both", expand=True)
 
+        elif screen_name == "change_password":
+            self._hide_sidebar()
+            from screens.change_password_screen import ChangePasswordScreen
+            ChangePasswordScreen(
+                self._content,
+            org=self._org,
+            on_success=lambda: self._show("home")
+        ).pack(fill="both", expand=True)
+            
         elif screen_name == "home":
             self._show_sidebar("home")
             HomeScreen(self._content, org=self._org).pack(fill="both", expand=True)
@@ -123,34 +141,49 @@ class PockiTrackApp(tk.Tk):
 
         elif screen_name == "wallet":
             self._show_sidebar("wallet")
-            WalletScreen(self._content, org=self._org).pack(fill="both", expand=True)
+            query = getattr(self, "_search_query", "")
+            self._search_query = ""  # clear after use
+            WalletScreen(self._content, org=self._org, search_query=query).pack(fill="both", expand=True)
 
         elif screen_name == "profile":
             self._show_sidebar("profile")
             ProfileScreen(self._content, org=self._org).pack(fill="both", expand=True)
 
         elif screen_name == "logout":
-            self._hide_sidebar()
             self._logged_in = False
+            self._org = None
+            self._hide_sidebar()
             self._show("start")
+            return
 
         self._current = screen_name
-        if self._sidebar and screen_name in (
-                "home", "history", "wallet", "profile"):
-            self._sidebar.set_active(screen_name)
+        # Re-apply window icon after every screen change
+        try:
+            self.iconphoto(True, self._icon)
+        except Exception:
+            pass
 
     def _post_login(self, org):
         self._logged_in = True
         self._org = org
-        self._show("home")
+        try:
+            from db import get_profile
+            profile = get_profile(org.get("id"))
+            self._org["org_short_name"] = profile.get("org_short_name") or ""
+        except Exception:
+            pass
+        if org.get("must_change_password"):
+            self._show("change_password")
+        else:
+            self._show("home")
 
     def _show_sidebar(self, screen_name=None):
         if self._sidebar is None:
+            self._sidebar_slot.pack(side="left", fill="y")
+            self._sidebar_slot.config(width=SIDEBAR_W)
             self._sidebar = Sidebar(self._sidebar_slot,
                                     on_navigate=self._show)
             self._sidebar.pack(fill="both", expand=True)
-            self._sidebar_slot.config(width=SIDEBAR_W)
-        # Only show topbar on home screen
         if screen_name == "home":
             self._show_topbar()
         else:
@@ -161,13 +194,19 @@ class PockiTrackApp(tk.Tk):
             self._sidebar.pack_forget()
             self._sidebar.destroy()
             self._sidebar = None
-            self._sidebar_slot.config(width=0)
+        self._sidebar_slot.config(width=0)
+        self._sidebar_slot.pack_forget()
+        self._right.pack_forget()
+        self._right.pack(side="left", fill="both", expand=True)
         self._hide_topbar()
 
     # ── Top bar ───────────────────────────────────────────────────────
     def _show_topbar(self):
         if self._topbar is not None:
-            return   # already built
+            old = self._topbar
+            self._topbar = None
+            old.destroy()
+            self.update_idletasks()
         self._topbar_frame.config(height=52)
         self._topbar = self._build_topbar(self._topbar_frame)
 
@@ -215,9 +254,11 @@ class PockiTrackApp(tk.Tk):
             return ph
 
         # ─── Profile pill ────────────────────────────────────────────
-        org_name = (self._org or {}).get("org_name", "") if self._org else ""
+        org_name = ""
+        if self._org:
+            org_name = (self._org.get("org_short_name") or 
+                        self._org.get("org_name", ""))
 
-        # build a temporary hidden frame to measure required width
         _measure = tk.Frame(bar, bg=WHITE)
         av_size  = 26
         _av_tmp  = tk.Canvas(_measure, width=av_size, height=av_size,
@@ -253,22 +294,52 @@ class PockiTrackApp(tk.Tk):
         def _draw_avatar():
             av_cv.delete("all")
             av_cv.create_oval(0, 0, av_size, av_size, fill="#ECDDC6", outline="")
-            default = _os.path.join(assets, "default_avatar.png")
-            if _os.path.exists(default):
-                try:
-                    img = Image.open(default).resize(
-                        (av_size, av_size), Image.LANCZOS).convert("RGBA")
-                    bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
-                    mask = Image.new("L",    (av_size, av_size), 0)
-                    ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
-                    bg.paste(img, mask=mask)
-                    ph = ImageTk.PhotoImage(bg.convert("RGB"))
-                    _imgs.append(ph)
-                    av_cv._ph = ph
-                    av_cv.create_image(av_size//2, av_size//2,
-                                       image=ph, anchor="center")
-                except Exception:
-                    pass
+
+            # Try to load profile photo from DB first
+            photo_img = None
+            try:
+                if self._org and self._org.get("id"):
+                    from db import get_profile
+                    profile = get_profile(self._org["id"])
+                    photo_url = profile.get("profile_photo_url", "")
+                    if photo_url:
+                        import urllib.request, io
+                        with urllib.request.urlopen(photo_url, timeout=5) as resp:
+                            data = resp.read()
+                        img = Image.open(io.BytesIO(data)).resize(
+                            (av_size, av_size), Image.LANCZOS).convert("RGBA")
+                        bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
+                        mask = Image.new("L",    (av_size, av_size), 0)
+                        ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
+                        bg.paste(img, mask=mask)
+                        ph = ImageTk.PhotoImage(bg.convert("RGB"))
+                        _imgs.append(ph)
+                        av_cv._ph = ph
+                        av_cv.create_image(av_size//2, av_size//2,
+                                        image=ph, anchor="center")
+                        photo_img = ph
+            except Exception:
+                pass
+
+            # Fallback to default_avatar.png
+            if photo_img is None:
+                default = _os.path.join(assets, "default_avatar.png")
+                if _os.path.exists(default):
+                    try:
+                        img = Image.open(default).resize(
+                            (av_size, av_size), Image.LANCZOS).convert("RGBA")
+                        bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
+                        mask = Image.new("L",    (av_size, av_size), 0)
+                        ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
+                        bg.paste(img, mask=mask)
+                        ph = ImageTk.PhotoImage(bg.convert("RGB"))
+                        _imgs.append(ph)
+                        av_cv._ph = ph
+                        av_cv.create_image(av_size//2, av_size//2,
+                                        image=ph, anchor="center")
+                    except Exception:
+                        pass
+
         _draw_avatar()
 
         name_lbl = tk.Label(pill_cv, text=org_name, bg=WHITE,
@@ -321,7 +392,14 @@ class PockiTrackApp(tk.Tk):
             _redraw_srch(WHITE, BORDER)
         search_entry.bind("<FocusIn>",  _focus_in)
         search_entry.bind("<FocusOut>", _focus_out)
-        search_entry.bind("<Return>", lambda e: self._show("wallet"))
+        def _do_search(e=None):
+            query = search_entry.get().strip()
+            if query == "Search wallets...":
+                query = ""
+            self._search_query = query
+            self._show("wallet")
+
+        search_entry.bind("<Return>", _do_search)
 
         srch_cv.bind("<Configure>", lambda e: _redraw_srch())
         bar.after(50, _redraw_srch)

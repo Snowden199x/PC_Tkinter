@@ -225,6 +225,10 @@ class StartScreen(tk.Frame):
 
     # ── scrollable page scaffold ──────────────────────────────────────
     def _build(self):
+        self._header_frame = tk.Frame(self, bg=_BG)
+        self._header_frame.pack(side="top", fill="x")
+        self._header()
+
         self._cv = tk.Canvas(self, bg=_BG, bd=0, highlightthickness=0)
         vsb = tk.Scrollbar(self, orient="vertical", command=self._cv.yview)
         self._cv.configure(yscrollcommand=vsb.set)
@@ -242,54 +246,41 @@ class StartScreen(tk.Frame):
             lambda e: self._cv.yview_scroll(int(-1*(e.delta/120)), "units"))
         self.bind("<Destroy>", lambda e: self._cv.unbind_all("<MouseWheel>") if e.widget is self else None)
 
-        self._header()
         self._hero()
         self._features()
         self._cta()
         self._footer()
 
-    # ══════════════════════════════════════════════════════════════════
-    # 1. HEADER
-    #    background: #f7f3eb   padding: 15px 50px
-    #    logo left  (img 90px + bold name 34px)
-    #    login-btn right  (bg #8b3b08, white text, radius 10px, 12px 35px pad)
-    # ══════════════════════════════════════════════════════════════════
     def _header(self):
-        hdr = tk.Frame(self._pg, bg=_BG)
+        hdr = tk.Frame(self._header_frame, bg=_BG)
         hdr.pack(fill="x", padx=50, pady=15)
 
-        # ── logo ─────────────────────────────────────────────────────
         lf = tk.Frame(hdr, bg=_BG, cursor="hand2")
         lf.pack(side="left")
 
-        logo_ico = self._img("pocki_logo.png", 64, base=True)
+        logo_ico = self._img("pocki_logo.png", 64)
         if logo_ico:
-            tk.Label(lf, image=logo_ico, bg=_BG).pack(side="left")
+            logo_lbl = tk.Label(lf, image=logo_ico, bg=_BG, cursor="hand2")
+            logo_lbl.pack(side="left")
+            logo_lbl.bind("<Button-1>", lambda e: self._cv.yview_moveto(0))
 
-        tk.Label(lf, text="PockiTrack",
-                 bg=_BG, fg=_TEXT_BODY,
-                 font=self._f(22, "bold")).pack(side="left", padx=12)
+        title_lbl = tk.Label(lf, text="PockiTrack", bg=_BG,
+                            fg=_TEXT_BODY, font=self._f(22, "bold"),
+                            cursor="hand2")
+        title_lbl.pack(side="left", padx=12)
+        title_lbl.bind("<Button-1>", lambda e: self._cv.yview_moveto(0))
+        lf.bind("<Button-1>", lambda e: self._cv.yview_moveto(0))
 
-        # ── Log In pill button ────────────────────────────────────────
-        # CSS: bg #8b3b08, white text, border-radius 10px, padding 12px 35px
         PillButton(hdr,
-                   text="Log in",
-                   width=120, height=42,
-                   bg=_PRIMARY, fg=_WHITE,
-                   hover_bg=_PRIMARY_HOV, hover_fg=_WHITE,
-                   border_color=None,
-                   radius=10,
-                   font=self._f(12, "bold"),
-                   command=self._on_login).pack(side="right")
+                text="Log in",
+                width=120, height=42,
+                bg=_PRIMARY, fg=_WHITE,
+                hover_bg=_PRIMARY_HOV, hover_fg=_WHITE,
+                border_color=None,
+                radius=10,
+                font=self._f(12, "bold"),
+                command=self._on_login).pack(side="right")
 
-    # ══════════════════════════════════════════════════════════════════
-    # 2. HERO
-    #    bg: rgba(243,213,141,0.2) ≈ #fdf6e3    padding: 80px 100px
-    #    LEFT  – h1 (40px weight-500), p (#828282), get-started btn
-    #    RIGHT – .hero-card  width 640 height 380  border #f3d58d
-    #              box-shadow 0 4 12 3 #f3d58d   border-radius 25px
-    #              two .card rows  (wallet icon + progress bar)
-    # ══════════════════════════════════════════════════════════════════
     def _hero(self):
         hero = tk.Frame(self._pg, bg=_HERO_BG)
         hero.pack(fill="x")
@@ -297,14 +288,13 @@ class StartScreen(tk.Frame):
         inner = tk.Frame(hero, bg=_HERO_BG)
         inner.pack(padx=80, pady=60, fill="x")
 
-        # ── LEFT: hero text ───────────────────────────────────────────
         left = tk.Frame(inner, bg=_HERO_BG)
         left.pack(side="left", anchor="n", fill="y")
 
         tk.Label(left,
                  text="Financial Management\nMade Simple",
                  bg=_HERO_BG, fg=_TEXT_BODY,
-                 font=self._f(28),          # CSS: 40px weight-500
+                 font=self._f(28),         
                  justify="left").pack(anchor="w")
 
         tk.Label(left,
@@ -315,8 +305,6 @@ class StartScreen(tk.Frame):
                  font=self._f(10),
                  justify="left").pack(anchor="w", pady=20)
 
-        # CSS: get-started  bg #8b3b08 white text  border-radius 8px
-        #      font-size 20px font-weight 600  padding 12px 25px
         PillButton(left,
                    text="Get started →",
                    width=175, height=44,
@@ -325,8 +313,6 @@ class StartScreen(tk.Frame):
                    radius=8,
                    font=self._f(13, "bold"),
                    command=self._on_login).pack(anchor="w")
-
-        # ── RIGHT: hero card ──────────────────────────────────────────
         right = tk.Frame(inner, bg=_HERO_BG)
         right.pack(side="right", anchor="n", padx=(50, 0))
         self._hero_card(right)
@@ -576,13 +562,13 @@ class StartScreen(tk.Frame):
 
     # ── image loader ──────────────────────────────────────────────────
     def _img(self, filename, size, base=False):
-        path = _os.path.join(_BASE if base else _ASSETS, filename)
+        path = _os.path.join(_ASSETS, filename)
         if not _os.path.exists(path):
             return None
         try:
-            img = Image.open(path).resize((size, size), Image.LANCZOS)
-            ph  = ImageTk.PhotoImage(img)
-            self._imgs.append(ph)   # prevent GC
+            img = Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            self._imgs.append(ph)
             return ph
         except Exception:
             return None

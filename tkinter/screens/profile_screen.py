@@ -57,6 +57,128 @@ class ProfileScreen(tk.Frame):
         self._active_tab = "organization"
         self._build()
 
+    def _open_date_picker(self, entry_widget, parent_overlay):
+        """Simple calendar date picker popup."""
+        from datetime import datetime, date
+        import calendar
+
+        # parse current value or use today
+        current = entry_widget.get().strip()
+        try:
+            sel = datetime.strptime(current, "%Y-%m-%d").date()
+        except Exception:
+            sel = date.today()
+
+        state = {"year": sel.year, "month": sel.month, "selected": sel}
+
+        # popup frame on top of overlay
+        popup = tk.Frame(parent_overlay, bg=BG_WHITE, padx=0, pady=0,
+                         highlightbackground="#E0D4C0", highlightthickness=2)
+        popup.lift()
+
+        def _position_popup(event=None):
+            parent_overlay.update_idletasks()
+            entry_widget.update_idletasks()
+            # position below the entry widget
+            ex = entry_widget.winfo_rootx() - parent_overlay.winfo_rootx()
+            ey = entry_widget.winfo_rooty() - parent_overlay.winfo_rooty()
+            eh = entry_widget.winfo_height()
+            popup.place(x=ex, y=ey + eh + 4)
+
+        def _build_calendar():
+            for w in popup.winfo_children():
+                w.destroy()
+
+            y, m = state["year"], state["month"]
+            month_name = calendar.month_name[m]
+
+            # nav row
+            nav = tk.Frame(popup, bg=BG_WHITE, padx=8, pady=6)
+            nav.pack(fill="x")
+
+            prev_btn = tk.Label(nav, text="‹", bg=BG_WHITE, fg=_BTN_BROWN,
+                                font=font(14), cursor="hand2")
+            prev_btn.pack(side="left")
+            def _prev(e):
+                if state["month"] == 1:
+                    state["month"] = 12; state["year"] -= 1
+                else:
+                    state["month"] -= 1
+                _build_calendar()
+            prev_btn.bind("<Button-1>", _prev)
+
+            tk.Label(nav, text=f"{month_name} {y}", bg=BG_WHITE, fg=TEXT_DARK,
+                     font=font(10, "bold")).pack(side="left", expand=True)
+
+            next_btn = tk.Label(nav, text="›", bg=BG_WHITE, fg=_BTN_BROWN,
+                                font=font(14), cursor="hand2")
+            next_btn.pack(side="right")
+            def _next(e):
+                if state["month"] == 12:
+                    state["month"] = 1; state["year"] += 1
+                else:
+                    state["month"] += 1
+                _build_calendar()
+            next_btn.bind("<Button-1>", _next)
+
+            tk.Frame(popup, bg=_BORDER, height=1).pack(fill="x")
+
+            # day headers
+            days_hdr = tk.Frame(popup, bg=BG_WHITE)
+            days_hdr.pack(fill="x", padx=6, pady=(4, 0))
+            for d in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]:
+                tk.Label(days_hdr, text=d, bg=BG_WHITE, fg=TEXT_MUTED,
+                         font=font(7, "bold"), width=3, anchor="center").pack(side="left")
+
+            # calendar grid
+            grid = tk.Frame(popup, bg=BG_WHITE, padx=6, pady=4)
+            grid.pack()
+
+            cal = calendar.monthcalendar(y, m)
+            today = date.today()
+
+            for week in cal:
+                row_f = tk.Frame(grid, bg=BG_WHITE)
+                row_f.pack()
+                for day in week:
+                    if day == 0:
+                        tk.Label(row_f, text="", bg=BG_WHITE, width=3,
+                                 font=font(8)).pack(side="left")
+                    else:
+                        d_obj = date(y, m, day)
+                        is_sel = (d_obj == state["selected"])
+                        is_today = (d_obj == today)
+
+                        bg_c = _BTN_BROWN if is_sel else ("#FFF3E0" if is_today else BG_WHITE)
+                        fg_c = "white" if is_sel else (_BTN_BROWN if is_today else TEXT_DARK)
+
+                        day_lbl = tk.Label(row_f, text=str(day), bg=bg_c, fg=fg_c,
+                                           font=font(8, "bold" if is_sel else "normal"),
+                                           width=3, cursor="hand2", pady=2)
+                        day_lbl.pack(side="left")
+
+                        def _select(e, d=d_obj, lbl=day_lbl):
+                            state["selected"] = d
+                            entry_widget.config(state="normal")
+                            entry_widget.delete(0, "end")
+                            entry_widget.insert(0, d.strftime("%Y-%m-%d"))
+                            entry_widget.config(state="normal")
+                            popup.destroy()
+
+                        day_lbl.bind("<Button-1>", _select)
+                        day_lbl.bind("<Enter>", lambda e, l=day_lbl, s=is_sel:
+                                     l.config(bg=_BTN_BROWN if s else "#ECDDC6"))
+                        day_lbl.bind("<Leave>", lambda e, l=day_lbl, b=bg_c:
+                                     l.config(bg=b))
+
+            # close if click outside
+            parent_overlay.bind("<Button-1>",
+                lambda e: popup.destroy() if popup.winfo_exists() else None,
+                add="+")
+
+        _build_calendar()
+        _position_popup()
+
     def _build(self):
         outer = tk.Frame(self, bg=BG_CREAM, padx=12, pady=16)
         outer.pack(fill="both", expand=True)
@@ -300,24 +422,31 @@ class ProfileScreen(tk.Frame):
             filetypes=[("Image files", "*.png *.jpg *.jpeg")])
         if not path:
             return
+        
         # show locally right away
         ph = _circle_img(path, 100, self._imgs)
         if ph:
             self._av_canvas.delete("all")
             self._av_canvas.create_oval(0, 0, 100, 100, fill="#fff", outline="")
             self._av_canvas.create_image(50, 50, image=ph, anchor="center")
-        # upload to Supabase and redraw from the public URL
-        try:
-            ext = path.rsplit(".", 1)[-1].lower()
-            with open(path, "rb") as f:
-                image_bytes = f.read()
-            public_url = update_profile_photo(self._org.get("id"), image_bytes, ext)
-            self._profile["profile_photo_url"] = public_url
-            # redraw from the confirmed public URL so it matches what the web sees
-            if public_url:
-                self._draw_avatar(public_url)
-        except Exception:
-            pass  # local preview already shown; upload failure is silent
+
+        # upload to Supabase in background thread para hindi mag-freeze ang UI
+        import threading
+
+        def _upload():
+            try:
+                ext = path.rsplit(".", 1)[-1].lower()
+                with open(path, "rb") as f:
+                    image_bytes = f.read()
+                public_url = update_profile_photo(self._org.get("id"), image_bytes, ext)
+                if public_url:
+                    self._profile["profile_photo_url"] = public_url
+                    # redraw from public URL on main thread
+                    self.after(0, lambda: self._draw_avatar(public_url))
+            except Exception as ex:
+                print(f"Photo upload failed: {ex}")
+
+        threading.Thread(target=_upload, daemon=True).start()
 
     def _refresh_overview_labels(self):
         """Update the overview banner text labels after a profile save."""
@@ -747,6 +876,8 @@ class ProfileScreen(tk.Frame):
         e_end   = _term_field(term_row, 1, "Term End (YYYY-MM-DD)",   "term_end")
         e_start.insert(0, (o.get("term_start") or "")[:10])
         e_end.insert(0,   (o.get("term_end")   or "")[:10])
+        e_start.bind("<Button-1>", lambda e: self._open_date_picker(e_start, overlay))
+        e_end.bind("<Button-1>",   lambda e: self._open_date_picker(e_end, overlay))
 
         # status dropdown
         grp_status = tk.Frame(body, bg=BG_WHITE)

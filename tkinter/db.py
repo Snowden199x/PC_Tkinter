@@ -18,6 +18,13 @@ def login_organization(username: str, password: str):
         raise ValueError("Incorrect password.")
     return org
 
+def change_password(org_id: int, new_password: str) -> None:
+    from werkzeug.security import generate_password_hash
+    hashed = generate_password_hash(new_password)
+    _sb.table("organizations").update({
+        "password": hashed,
+        "must_change_password": False,
+    }).eq("id", org_id).execute()
 
 def get_home_data(org_id: int) -> dict:
 
@@ -452,7 +459,7 @@ def get_profile(org_id: int) -> dict:
     raw_path = profile.get("profile_photo_url") or ""
     if raw_path:
         try:
-            bucket = "profile-photos"
+            bucket = "profile_photo"
             public = _sb.storage.from_(bucket).get_public_url(raw_path)
             photo_url = public.get("publicUrl") if isinstance(public, dict) else (public or "")
         except Exception:
@@ -500,7 +507,7 @@ def update_profile(org_id: int, org_short_name: str = None, email: str = None) -
 def update_profile_photo(org_id: int, image_bytes: bytes, ext: str) -> str:
     """Upload photo to Supabase Storage and update profile_users. Returns public URL."""
     from uuid import uuid4
-    bucket = "profile-photos"
+    bucket = "profile_photo"
     path = f"orgs/{org_id}/org-{org_id}-{uuid4()}.{ext}"
     _sb.storage.from_(bucket).upload(path, image_bytes)
 

@@ -42,8 +42,8 @@ class LoginScreen(tk.Frame):
 
     # ---------- BASE IMAGE LOADER ----------
     def base_img(self, name, w=None, h=None):
-        """Load image from BASE_DIR (for pocki_logo.png)"""
-        path = os.path.join(BASE_DIR, name)
+        """Load image from assets/images/"""
+        path = os.path.join(BASE_DIR, "assets", "images", name)
         if not os.path.exists(path):
             return None
         try:
@@ -85,6 +85,8 @@ class LoginScreen(tk.Frame):
                  bg=BG_COLOR).pack(side="left", padx=8)
 
         logo_frame.bind("<Button-1>", lambda e: self.on_back())
+        for child in logo_frame.winfo_children():
+            child.bind("<Button-1>", lambda e: self.on_back())
 
         # ===== CENTER CONTAINER =====
         container = tk.Frame(self, bg=BG_COLOR)
@@ -149,6 +151,8 @@ class LoginScreen(tk.Frame):
                                  bg="white")
         self.password.pack(side="left", fill="x", expand=True, ipady=6, padx=(4, 0))
         self.password.bind("<Key>", lambda e: self._clear_error())
+        self.username.bind("<Return>", lambda e: self.login())
+        self.password.bind("<Return>", lambda e: self.login())
 
         self.showing = False
 
