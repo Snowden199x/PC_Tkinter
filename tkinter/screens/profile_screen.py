@@ -261,7 +261,7 @@ class ProfileScreen(tk.Frame):
 
         # title
         tk.Label(self._box, text="Profile", bg=BG_WHITE, fg=TEXT_DARK,
-                 font=("Georgia", 22, "italic")).pack(anchor="w", pady=(0, 12))
+                 font=("Playfair Display Italic", 22)).pack(anchor="w", pady=(0, 12))
 
         # loading card (matches web loading state)
         loading_card = tk.Frame(self._box, bg="#F5F5F5", padx=30, pady=30)
@@ -349,13 +349,16 @@ class ProfileScreen(tk.Frame):
     def _draw_avatar_default(self):
         """Draw the placeholder avatar immediately (no network needed)."""
         self._av_canvas.delete("all")
-        self._av_canvas.create_oval(0, 0, 100, 100, fill="#fff", outline="")
+        # cream circle background
+        self._av_canvas.create_oval(0, 0, 100, 100, fill=_GRAD1, outline="")
         default = _os.path.join(_ASSETS, "default_avatar.png")
         if _os.path.exists(default):
-            ph = _circle_img(default, 96, self._imgs)
+            ph = _circle_img(default, 100, self._imgs)
             if ph:
                 self._av_canvas.create_image(50, 50, image=ph, anchor="center")
                 return
+        # last-resort fallback: grey circle with person emoji
+        self._av_canvas.create_oval(2, 2, 98, 98, fill="#E0D4C0", outline="")
         self._av_canvas.create_text(50, 50, text="👤", font=font(28), fill=TEXT_MUTED)
 
     def _fetch_avatar_async(self, url):

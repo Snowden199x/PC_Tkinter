@@ -68,7 +68,7 @@ class HistoryScreen(tk.Frame):
 
         # title
         tk.Label(self._box, text="Transaction History", bg=BG_WHITE,
-                 fg=TEXT_DARK, font=("Georgia", 22, "italic")).pack(anchor="w", pady=(0, 6))
+                 fg=TEXT_DARK, font=("Playfair Display Italic", 22)).pack(anchor="w", pady=(0, 6))
 
         # month selector
         nav_row = tk.Frame(self._box, bg=BG_WHITE)

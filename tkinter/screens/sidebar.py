@@ -48,7 +48,6 @@ class Sidebar(tk.Frame):
 
         self._build_logo()
         self._build_nav()
-        self._build_logout()
         self.set_active("home")
 
     # ── Logo ─────────────────────────────────────────────────────────
@@ -70,7 +69,7 @@ class Sidebar(tk.Frame):
             logo_lbl.pack(side="left")
         
         title_lbl = tk.Label(logo_container, text="PockiTrack", bg=_BG,
-                fg="#000000", font=font(17, "medium"), cursor="hand2")
+                fg="#000000", font=("Poppins SemiBold", 17), cursor="hand2")
         title_lbl.pack(side="left", padx=(8, 0))
 
     # Hover + click effects
@@ -105,7 +104,7 @@ class Sidebar(tk.Frame):
     # ── Nav items ─────────────────────────────────────────────────────
     def _build_nav(self):
         self._nav_frame = tk.Frame(self, bg=_BG, padx=10)
-        self._nav_frame.pack(fill="x", pady=(30, 0))
+        self._nav_frame.pack(fill="x", anchor="w", pady=(30, 0))
 
         for key, label, icon_file in NAV_ITEMS:
             icon_path = _os.path.join(ASSETS_DIR, icon_file)
@@ -147,7 +146,7 @@ class Sidebar(tk.Frame):
     def _make_pill(self, parent, key, label, ico_dark, ico_white):
         # outer frame (cream bg, full width)
         outer = tk.Frame(parent, bg=_BG, cursor="hand2")
-        outer.pack(fill="x", pady=2)
+        outer.pack(fill="x", anchor="w", pady=2)
 
         # pill canvas — rounded highlight background
         pill = tk.Canvas(outer, bg=_BG, height=38,
@@ -158,7 +157,7 @@ class Sidebar(tk.Frame):
         pill._pill_colour = _BG
 
         inner = tk.Frame(pill, bg=_BG)
-        inner.place(relx=0, rely=0.5, anchor="w", x=12)
+        inner.place(x=12, rely=0.5, anchor="w")
 
         lbl_icon = tk.Label(inner, bg=_BG,
                             image=ico_dark if ico_dark else "",
@@ -167,7 +166,7 @@ class Sidebar(tk.Frame):
         lbl_icon.pack(side="left")
 
         lbl_text = tk.Label(inner, text=label, bg=_BG,
-                            fg=_NAV_FG, font=font(11, "bold"))
+                            fg=_NAV_FG, font=("Poppins Medium", 11))
         lbl_text.pack(side="left", padx=(10, 0))
 
         # store refs for set_active / hover

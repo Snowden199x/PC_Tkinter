@@ -50,14 +50,14 @@ class PockiTrackApp(tk.Tk):
         self._shell = tk.Frame(self, bg=BG_CREAM)
         self._shell.pack(fill="both", expand=True)
 
-        # Sidebar placeholder (always packed first so content fills the rest)
+        # Sidebar placeholder — packed LEFT first so it always sits on the left
         self._sidebar_slot = tk.Frame(self._shell, bg=BG_CREAM, width=0)
         self._sidebar_slot.pack(side="left", fill="y")
         self._sidebar_slot.pack_propagate(False)
 
         self._sidebar = None
 
-        # Right side: top bar + content stacked vertically
+        # Content area — packed LEFT after sidebar so it fills the remaining space
         self._right = tk.Frame(self._shell, bg=BG_CREAM)
         self._right.pack(side="left", fill="both", expand=True)
 
@@ -75,23 +75,24 @@ class PockiTrackApp(tk.Tk):
 
     # ── Poppins font loader ───────────────────────────────────────────
     def _try_load_poppins(self):
-        """Try to register Poppins from a fonts/ directory if present."""
-        fonts_dir = os.path.join(BASE_DIR, "assets", "fonts")
-        if not os.path.isdir(fonts_dir):
-            return
+        """Try to register Poppins and Playfair Display fonts if present."""
+        font_dirs = [
+            os.path.join(BASE_DIR, "assets", "fonts", "Poppins"),
+            os.path.join(BASE_DIR, "assets", "fonts", "Playfair"),
+        ]
         try:
-            # Windows: Add font using GDI
-            for f in os.listdir(fonts_dir):
-                if f.lower().endswith(".ttf"):
-                    font_path = os.path.join(fonts_dir, f)
-                    try:
-                        from ctypes import windll
-                        windll.gdi32.AddFontResourceW(font_path)
-                        windll.user32.SendMessageW(0xFFFF, 0x001D, 0, 0)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+            from ctypes import windll
+            for fonts_dir in font_dirs:
+                if not os.path.isdir(fonts_dir):
+                    continue
+                for f in os.listdir(fonts_dir):
+                    if f.lower().endswith(".ttf"):
+                        font_path = os.path.join(fonts_dir, f)
+                        try:
+                            windll.gdi32.AddFontResourceW(font_path)
+                            windll.user32.SendMessageW(0xFFFF, 0x001D, 0, 0)
+                        except Exception:
+                            pass
         except Exception as e:
             print(f"Font loading note: {e}")
 
@@ -179,8 +180,12 @@ class PockiTrackApp(tk.Tk):
 
     def _show_sidebar(self, screen_name=None):
         if self._sidebar is None:
-            self._sidebar_slot.pack(side="left", fill="y")
+            # Re-pack both frames in correct order: sidebar LEFT, content RIGHT
+            self._sidebar_slot.pack_forget()
+            self._right.pack_forget()
             self._sidebar_slot.config(width=SIDEBAR_W)
+            self._sidebar_slot.pack(side="left", fill="y")
+            self._right.pack(side="left", fill="both", expand=True)
             self._sidebar = Sidebar(self._sidebar_slot,
                                     on_navigate=self._show)
             self._sidebar.pack(fill="both", expand=True)

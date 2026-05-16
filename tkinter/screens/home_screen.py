@@ -73,9 +73,8 @@ class HomeScreen(tk.Frame):
     # ── main render ───────────────────────────────────────────────────
     def _render(self):
         d        = self._data
-        org_name = (self._org.get("org_short_name") or 
-            self._org.get("org_name", "Organization"))
-        date_str = datetime.now().strftime("%A, %B %d, %Y")
+        org_name = self._org.get("org_name", "Organization")
+        date_str = datetime.now().strftime("%A, %B %d")
         now      = datetime.now()
         month_lbl = now.strftime("%B")
 
@@ -124,7 +123,7 @@ class HomeScreen(tk.Frame):
         tk.Label(hdr,
                  text=f"Hello, {org_name}",
                  bg=BG_WHITE, fg=TEXT_DARK,
-                 font=("Georgia", 22, "italic")).pack(anchor="w")
+                 font=("Playfair Display Italic", 22)).pack(anchor="w")
         tk.Label(hdr,
                  text=date_str,
                  bg=BG_WHITE, fg=TEXT_MUTED,
@@ -168,16 +167,16 @@ class HomeScreen(tk.Frame):
         banner_canvas.bind("<Configure>", _draw_banner)
 
         summary_items = [
-            ("Total Balance",             f"₱{d['total_balance']:,.2f}"),
-            (f"Income this {month_lbl}",  f"₱{d['income_month']:,.2f}"),
-            (f"Expenses this {month_lbl}", f"₱{d['expense_month']:,.2f}"),
+            ("Total Balance",             f"Php {d['total_balance']:,.2f}"),
+            (f"Income this {month_lbl}",  f"Php {d['income_month']:,.2f}"),
+            (f"Expenses this {month_lbl}", f"Php {d['expense_month']:,.2f}"),
             ("Reports submitted",          str(d.get("reports", 0))),
         ]
         card_frames = []
         for i, (lbl, val) in enumerate(summary_items):
             card_cv = tk.Canvas(banner_canvas, bd=0, highlightthickness=0)
-            lbl_widget = tk.Label(card_cv, text=lbl, fg="#5a3a00", font=font(8, "medium"))
-            val_widget = tk.Label(card_cv, text=val, fg="#3a2000", font=font(12))
+            lbl_widget = tk.Label(card_cv, text=lbl, fg="#000000", font=("Poppins SemiBold", 9))
+            val_widget = tk.Label(card_cv, text=val, fg="#3a2000", font=font(10))
             card_frames.append((i, card_cv, lbl_widget, val_widget))
 
         def _draw_card(cv, lbl_w, val_w, grad_slice_x, grad_slice_w, card_w, card_h):
@@ -250,7 +249,7 @@ class HomeScreen(tk.Frame):
                  fg=TEXT_DARK, font=font(11, "medium")).pack(anchor="w", pady=(0, 8))
 
         scroll_outer = tk.Frame(col, bg=BG_WHITE,
-                                highlightbackground=DIVIDER,
+                                highlightbackground=BG_WHITE,
                                 highlightthickness=1)
         scroll_outer.pack(fill="both", expand=True)
 
@@ -266,6 +265,19 @@ class HomeScreen(tk.Frame):
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+
+        def _scroll_wallets(e):
+            try:
+                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+            except Exception:
+                pass
+
+        # only scroll when the cursor is hovering over the wallets panel
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _scroll_wallets))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        canvas.bind("<Destroy>",
+                    lambda e: canvas.unbind_all("<MouseWheel>")
+                    if e.widget is canvas else None)
 
         wallet_img = _load_img_rounded("wallet.png", 64, 56, 7, self._imgs)
 
@@ -291,14 +303,55 @@ class HomeScreen(tk.Frame):
         used          = total_expense
         progress      = min((used / budget * 100) if budget > 0 else 0, 100)
 
-        # show month only — strip " – WalletName" suffix if present
         month_only = name.split(" – ")[0].strip() if " – " in name else name
 
-        card = tk.Frame(parent, bg=BG_WHITE,
-                        highlightbackground="#F0E6D5",
-                        highlightthickness=1,
-                        padx=14, pady=12)
-        card.pack(fill="x", pady=5, padx=4)
+        B = 2          # border thickness
+        R = 8          # corner radius
+        PAD = R + B    # = 10 — keeps the card frame clear of the corner arc pixels
+
+        # outer canvas — bg matches parent so rounded corners blend in
+        cv = tk.Canvas(parent, bd=0, highlightthickness=0, bg=BG_WHITE)
+        cv.pack(fill="x", pady=2, padx=4)
+
+        # card frame placed PAD pixels in from every edge
+        card = tk.Frame(cv, bg=BG_WHITE, padx=14, pady=12)
+        card_win = cv.create_window(PAD, PAD, anchor="nw", window=card)
+
+        def _draw(event=None):
+            from PIL import Image, ImageDraw, ImageTk as _ITk
+            cw = cv.winfo_width()
+            ch = card.winfo_reqheight()
+            if cw < 4 or ch < 4:
+                return
+            total_h = ch + PAD * 2
+            cv.config(height=total_h)
+            cv.itemconfig(card_win, width=cw - PAD * 2)
+
+            scale = 4
+            sw, sh = cw * scale, total_h * scale
+            r = R * scale
+            bdr = int(DIVIDER.lstrip("#"), 16)
+            bdr_rgb = ((bdr >> 16) & 255, (bdr >> 8) & 255, bdr & 255)
+
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [B * scale, B * scale, sw - 1 - B * scale, sh - 1 - B * scale],
+                radius=r,
+                fill=(255, 255, 255, 255),
+                outline=bdr_rgb + (255,), width=B * scale)
+            img = img.resize((cw, total_h), Image.LANCZOS)
+
+            bg_img = Image.new("RGB", (cw, total_h), (255, 255, 255))
+            bg_img.paste(img, mask=img.split()[3])
+
+            ph = _ITk.PhotoImage(bg_img)
+            cv._ph = ph
+            cv.delete("card_bg")
+            cv.create_image(0, 0, anchor="nw", image=ph, tags="card_bg")
+            cv.tag_lower("card_bg")
+
+        card.bind("<Configure>", lambda e: cv.after(0, _draw))
+        cv.bind("<Configure>",   lambda e: cv.after(0, _draw))
 
         # icon
         icon_f = tk.Frame(card, bg=BG_WHITE)
@@ -360,7 +413,7 @@ class HomeScreen(tk.Frame):
                  fg=TEXT_DARK, font=font(11, "medium")).pack(anchor="w", pady=(0, 8))
 
         scroll_outer = tk.Frame(col, bg=BG_WHITE,
-                                highlightbackground=DIVIDER,
+                                highlightbackground=BG_WHITE,
                                 highlightthickness=1)
         scroll_outer.pack(fill="both", expand=True)
 
@@ -382,7 +435,10 @@ class HomeScreen(tk.Frame):
                 canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
             except Exception:
                 pass
-        canvas.bind_all("<MouseWheel>", _scroll)
+
+        # only scroll when the cursor is hovering over the history panel
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _scroll))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         canvas.bind("<Destroy>",
                     lambda e: canvas.unbind_all("<MouseWheel>")
                     if e.widget is canvas else None)
@@ -413,7 +469,6 @@ class HomeScreen(tk.Frame):
         amt   = total if t["kind"] == "income" else -total
         qty_line = f"{price:,.2f} x {qty} ({total:,.2f})"
 
-        # wallet name as the "month label" header (since home shows across wallets)
         if wallet_map:
             header = wallet_map.get(t.get("wallet_id"), "")
         else:
@@ -424,12 +479,60 @@ class HomeScreen(tk.Frame):
         except Exception:
             month_label = date
 
-        card = tk.Frame(parent, bg=BG_WHITE,
-                        highlightbackground="#ECDDC6",
-                        highlightthickness=1, padx=14, pady=10)
-        card.pack(fill="x", pady=4, padx=4)
-        card.bind("<Enter>", lambda e: card.config(highlightbackground="#E59E2C"))
-        card.bind("<Leave>", lambda e: card.config(highlightbackground="#ECDDC6"))
+        B = 2
+        R = 8            # corner radius
+        # PAD ensures the card Frame never reaches the corner arc pixels.
+        # The frame is placed at (PAD, PAD) inside the canvas; the PIL rounded
+        # rect is drawn from (0,0) on the canvas.  PAD >= R keeps the frame
+        # entirely inside the straight-edge zone of the rounded rectangle.
+        PAD = R + B      # = 10
+        BDR_NORMAL = "#ECDDC6"
+        BDR_HOVER  = "#E59E2C"
+
+        cv = tk.Canvas(parent, bd=0, highlightthickness=0, bg=BG_WHITE)
+        cv.pack(fill="x", pady=2, padx=4)
+
+        # card frame placed PAD pixels in from every edge of the canvas
+        card = tk.Frame(cv, bg=BG_WHITE, padx=14, pady=10)
+        card_win = cv.create_window(PAD, PAD, anchor="nw", window=card)
+
+        def _draw(bdr_hex=BDR_NORMAL):
+            from PIL import Image, ImageDraw, ImageTk as _ITk
+            cw = cv.winfo_width()
+            ch = card.winfo_reqheight()
+            if cw < 4 or ch < 4:
+                return
+            # canvas height = card height + PAD on top and bottom
+            total_h = ch + PAD * 2
+            cv.config(height=total_h)
+            # card frame fills canvas minus PAD on each side
+            cv.itemconfig(card_win, width=cw - PAD * 2)
+            scale = 4
+            sw, sh = cw * scale, total_h * scale
+            r = R * scale
+            bdr = int(bdr_hex.lstrip("#"), 16)
+            bdr_rgb = ((bdr >> 16) & 255, (bdr >> 8) & 255, bdr & 255)
+            # draw rounded rect over the full canvas area
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [B * scale, B * scale, sw - 1 - B * scale, sh - 1 - B * scale],
+                radius=r,
+                fill=(255, 255, 255, 255),
+                outline=bdr_rgb + (255,), width=B * scale)
+            img = img.resize((cw, total_h), Image.LANCZOS)
+            bg_img = Image.new("RGB", (cw, total_h), (255, 255, 255))
+            bg_img.paste(img, mask=img.split()[3])
+            ph = _ITk.PhotoImage(bg_img)
+            cv._ph = ph
+            cv.delete("card_bg")
+            cv.create_image(0, 0, anchor="nw", image=ph, tags="card_bg")
+            cv.tag_lower("card_bg")
+
+        card.bind("<Configure>", lambda e: cv.after(0, _draw))
+        cv.bind("<Configure>",   lambda e: cv.after(0, _draw))
+        for w in (cv, card):
+            w.bind("<Enter>", lambda e: _draw(BDR_HOVER))
+            w.bind("<Leave>", lambda e: _draw(BDR_NORMAL))
 
         left = tk.Frame(card, bg=BG_WHITE)
         left.pack(side="left", fill="x", expand=True)

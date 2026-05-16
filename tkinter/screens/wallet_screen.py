@@ -193,7 +193,7 @@ class WalletScreen(tk.Frame):
         hdr = tk.Frame(self._box, bg=BG_WHITE)
         hdr.pack(fill="x", pady=(0, 10))
         tk.Label(hdr, text="Wallets", bg=BG_WHITE, fg=TEXT_DARK,
-                 font=("Georgia", 22, "italic")).pack(side="left")
+                 font=("Playfair Display Italic", 22)).pack(side="left")
 
         # academic year dropdown
         self._year_var = tk.StringVar(value="All years")
@@ -400,10 +400,10 @@ class WalletScreen(tk.Frame):
         back.bind("<Enter>",    lambda e: back.config(fg="#5A2D0C"))
         back.bind("<Leave>",    lambda e: back.config(fg=_BTN_BROWN))
 
-        # title — month name only, italic Georgia
+        # title — month name only, Playfair Display Italic
         month_title = wallet.get("month_name", "").capitalize()
         tk.Label(hdr, text=month_title, bg=BG_WHITE, fg=TEXT_DARK,
-                 font=("Georgia", 16, "italic")).pack(side="left", padx=(8, 0))
+                 font=("Playfair Display Italic", 16)).pack(side="left", padx=(8, 0))
 
         # —— Add budget secondary button (right side) — rounded pill ——
         try:

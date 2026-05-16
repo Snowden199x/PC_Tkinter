@@ -35,24 +35,33 @@ def get_home_data(org_id: int) -> dict:
     wallet_name_map = {w["id"]: w["name"] for w in wallets}
 
     # transactions for all wallets
-    transactions = []
+    transactions = []       # recent 20 — used for history display
+    all_transactions = []   # all — used for balance & monthly totals
     if wallet_ids:
         tx_res = _sb.table("wallet_transactions").select("*").in_("wallet_id", wallet_ids).order("date_issued", desc=True).limit(20).execute()
         transactions = tx_res.data or []
+        all_tx_res = _sb.table("wallet_transactions").select("kind,price,quantity,date_issued").in_("wallet_id", wallet_ids).execute()
+        all_transactions = all_tx_res.data or []
 
-    # this month income & expense
+    # this month income & expense (from ALL transactions)
     now = datetime.now()
     month_str = now.strftime("%Y-%m")
-    month_tx = [t for t in transactions if (t["date_issued"] or "").startswith(month_str)]
+    month_tx = [t for t in all_transactions if (t["date_issued"] or "").startswith(month_str)]
     income_month  = sum(t["price"] * t["quantity"] for t in month_tx if t["kind"] == "income")
     expense_month = sum(t["price"] * t["quantity"] for t in month_tx if t["kind"] == "expense")
 
-    # total balance across all wallets
-    total_balance = sum(
-        (t["price"] * t["quantity"]) if t["kind"] == "income"
-        else -(t["price"] * t["quantity"])
-        for t in transactions
-    )
+    # total balance across ALL wallets = beginning cash + income - expenses
+    # (same formula as web: beginning_total + total_income_all - total_expenses_all)
+    total_income_all  = sum(t["price"] * t["quantity"] for t in all_transactions if t["kind"] == "income")
+    total_expense_all = sum(t["price"] * t["quantity"] for t in all_transactions if t["kind"] == "expense")
+
+    # beginning cash = sum of all wallet_budgets.amount
+    beginning_total = 0.0
+    if wallet_ids:
+        bud_sum_res = _sb.table("wallet_budgets").select("amount").in_("wallet_id", wallet_ids).execute()
+        beginning_total = sum(float(b.get("amount") or 0) for b in (bud_sum_res.data or []))
+
+    total_balance = beginning_total + total_income_all - total_expense_all
 
     # ── Wallets overview — per budget-folder, same as web /api/wallets/overview ──
     wallets_overview = []
