@@ -31,16 +31,30 @@ def _load(name, w, h, cache):
         return None
 
 
-def _circle_img(img_path, size, cache):
-    """Crop image to circle, composited onto white so no black corners."""
+def _circle_img(img_path_or_pil, size, cache, bg_color=None):
+    """Crop image to a smooth anti-aliased circle at 4× scale.
+    If bg_color is None, returns RGBA with transparent corners (use on canvas directly).
+    If bg_color is given, composites onto that solid colour."""
     try:
-        raw = Image.open(img_path).resize((size, size), Image.LANCZOS).convert("RGBA")
-        # white backing so transparent corners stay white, not black
-        bg = Image.new("RGBA", (size, size), (255, 255, 255, 255))
-        mask = Image.new("L", (size, size), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
-        bg.paste(raw, mask=mask)
-        ph = ImageTk.PhotoImage(bg.convert("RGB"))
+        if isinstance(img_path_or_pil, str):
+            raw = Image.open(img_path_or_pil).convert("RGBA")
+        else:
+            raw = img_path_or_pil.convert("RGBA")
+        scale = 4
+        s = size * scale
+        big = raw.resize((s, s), Image.LANCZOS)
+        mask = Image.new("L", (s, s), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, s - 1, s - 1), fill=255)
+        if bg_color is not None:
+            bg = Image.new("RGBA", (s, s), bg_color + (255,))
+            bg.paste(big, mask=mask)
+            result = bg.resize((size, size), Image.LANCZOS).convert("RGB")
+        else:
+            # transparent outside the circle
+            out = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+            out.paste(big, mask=mask)
+            result = out.resize((size, size), Image.LANCZOS)
+        ph = ImageTk.PhotoImage(result)
         cache.append(ph)
         return ph
     except Exception:
@@ -289,14 +303,54 @@ class ProfileScreen(tk.Frame):
     # ── Overview banner ───────────────────────────────────────────────
     def _render_overview(self):
         p = self._profile
-        banner = tk.Frame(self._box, bg=_GRAD1, padx=20, pady=20)
-        banner.pack(fill="x", pady=(0, 16))
 
-        # avatar circle
+        # rounded banner using a canvas + PIL, same technique as other cards
+        R   = 20   # corner radius
+        PAD = R    # inset so the frame never covers the corner arc pixels
+        banner_cv = tk.Canvas(self._box, bg=BG_WHITE, bd=0, highlightthickness=0)
+        banner_cv.pack(fill="x", pady=(0, 16))
+
+        banner = tk.Frame(banner_cv, bg=_GRAD1, padx=20, pady=20)
+        banner_win = banner_cv.create_window(PAD, PAD, anchor="nw", window=banner)
+
+        def _draw_banner(event=None):
+            w = banner_cv.winfo_width()
+            h = banner.winfo_reqheight()
+            if w < 4 or h < 4:
+                return
+            total_h = h + PAD * 2
+            banner_cv.config(height=total_h)
+            banner_cv.itemconfig(banner_win, width=w - PAD * 2, height=h)
+            scale = 4
+            sw, sh = w * scale, total_h * scale
+            r = R * scale
+            # white background for corners
+            bg_val = int(BG_WHITE.lstrip("#"), 16)
+            bg_rgb = ((bg_val >> 16) & 255, (bg_val >> 8) & 255, bg_val & 255)
+            # cream fill for the rounded rect
+            g_val = int(_GRAD1.lstrip("#"), 16)
+            fill_rgb = ((g_val >> 16) & 255, (g_val >> 8) & 255, g_val & 255)
+            from PIL import Image, ImageDraw as _ID
+            img = Image.new("RGB", (sw, sh), bg_rgb)
+            mask = Image.new("L", (sw, sh), 0)
+            _ID.Draw(mask).rounded_rectangle([0, 0, sw - 1, sh - 1], radius=r, fill=255)
+            cream = Image.new("RGB", (sw, sh), fill_rgb)
+            img.paste(cream, mask=mask)
+            img = img.resize((w, total_h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            banner_cv._ph = ph
+            banner_cv.delete("banner_bg")
+            banner_cv.create_image(0, 0, anchor="nw", image=ph, tags="banner_bg")
+            banner_cv.tag_lower("banner_bg")
+
+        banner.bind("<Configure>", lambda e: banner_cv.after(0, _draw_banner))
+        banner_cv.bind("<Configure>", lambda e: banner_cv.after(0, _draw_banner))
+
+        # avatar circle — canvas bg matches banner so no square shows
         av_frame = tk.Frame(banner, bg=_GRAD1)
         av_frame.pack(side="left", padx=(0, 20))
 
-        av_canvas = tk.Canvas(av_frame, width=100, height=100,
+        av_canvas = tk.Canvas(av_frame, width=108, height=108,
                               bg=_GRAD1, bd=0, highlightthickness=0)
         av_canvas.pack()
         self._av_canvas = av_canvas
@@ -311,15 +365,31 @@ class ProfileScreen(tk.Frame):
 
         cam_ico = _load("camera_icon.png", 16, 16, self._imgs)
         change_btn = tk.Label(av_frame,
-                              text="  Change Photo" if not cam_ico else "",
+                              text=" Change Photo",
                               image=cam_ico if cam_ico else "",
                               compound="left",
-                              bg=_BORDER, fg=TEXT_DARK,
-                              font=font(8), padx=10, pady=5, cursor="hand2")
+                              bg=_GRAD1, fg="#AAAAAA",
+                              font=font(8), padx=10, pady=5, cursor="arrow")
         change_btn.pack(pady=(6, 0))
-        change_btn.bind("<Button-1>", lambda e: self._change_photo())
-        change_btn.bind("<Enter>", lambda e: change_btn.config(bg="#E59E2C", fg="white"))
-        change_btn.bind("<Leave>", lambda e: change_btn.config(bg=_BORDER, fg=TEXT_DARK))
+        self._change_btn = change_btn  # store ref so edit/cancel can toggle it
+
+        def _do_change(e):
+            if getattr(self, "_edit_mode", False):
+                self._change_photo()
+
+        def _on_enter(e):
+            if getattr(self, "_edit_mode", False):
+                change_btn.config(bg="#E59E2C", fg="white")
+
+        def _on_leave(e):
+            if getattr(self, "_edit_mode", False):
+                change_btn.config(bg=_BORDER, fg=TEXT_DARK)
+            else:
+                change_btn.config(bg=_GRAD1, fg="#AAAAAA")
+
+        change_btn.bind("<Button-1>", _do_change)
+        change_btn.bind("<Enter>",    _on_enter)
+        change_btn.bind("<Leave>",    _on_leave)
 
         # info
         info = tk.Frame(banner, bg=_GRAD1)
@@ -339,27 +409,79 @@ class ProfileScreen(tk.Frame):
                      font=font(9), anchor="w")
             self._ov_email.pack(anchor="w")
 
-        # accreditation badge
+        # accreditation badge — rounded pill
         status = p.get("status", "Active")
         badge_bg = "#4CAF50" if status == "Active" else "#FF9800"
-        badge = tk.Label(info, text=f"✓  {status}", bg=badge_bg, fg="white",
-                         font=font(9, "bold"), padx=14, pady=6)
-        badge.pack(anchor="w", pady=(10, 0))
+        badge_cv = tk.Canvas(info, bg=_GRAD1, bd=0, highlightthickness=0,
+                             height=30, width=130)
+        badge_cv.pack(anchor="w", pady=(10, 0))
+
+        def _draw_badge(event=None):
+            from PIL import Image, ImageDraw as _ID
+            w = badge_cv.winfo_width() or 130
+            h = badge_cv.winfo_height() or 30
+            if w < 4 or h < 4:
+                return
+            scale = 4
+            sw, sh = w * scale, h * scale
+            r = (h // 2) * scale
+            cr = int(badge_bg.lstrip("#"), 16)
+            fill_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            bg_cr = int(_GRAD1.lstrip("#"), 16)
+            bg_rgb = ((bg_cr >> 16) & 255, (bg_cr >> 8) & 255, bg_cr & 255)
+            img = Image.new("RGB", (sw, sh), bg_rgb)
+            mask = Image.new("L", (sw, sh), 0)
+            _ID.Draw(mask).rounded_rectangle([0, 0, sw - 1, sh - 1], radius=r, fill=255)
+            pill = Image.new("RGB", (sw, sh), fill_rgb)
+            img.paste(pill, mask=mask)
+            img = img.resize((w, h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            badge_cv._ph = ph
+            badge_cv.delete("all")
+            badge_cv.create_image(0, 0, anchor="nw", image=ph)
+            badge_cv.create_text(w // 2, h // 2, text="✓  Accredited",
+                                 fill="white", font=font(9, "bold"), anchor="center")
+
+        badge_cv.bind("<Configure>", lambda e: _draw_badge())
+        badge_cv.after(50, _draw_badge)
 
     def _draw_avatar_default(self):
         """Draw the placeholder avatar immediately (no network needed)."""
         self._av_canvas.delete("all")
-        # cream circle background
-        self._av_canvas.create_oval(0, 0, 100, 100, fill=_GRAD1, outline="")
+        self._draw_white_ring()
         default = _os.path.join(_ASSETS, "default_avatar.png")
         if _os.path.exists(default):
+            # transparent corners — white ring shows through cleanly
             ph = _circle_img(default, 100, self._imgs)
             if ph:
-                self._av_canvas.create_image(50, 50, image=ph, anchor="center")
+                self._av_canvas.create_image(54, 54, image=ph, anchor="center")
                 return
-        # last-resort fallback: grey circle with person emoji
-        self._av_canvas.create_oval(2, 2, 98, 98, fill="#E0D4C0", outline="")
-        self._av_canvas.create_text(50, 50, text="👤", font=font(28), fill=TEXT_MUTED)
+        # last-resort fallback
+        self._av_canvas.create_oval(8, 8, 108, 108, fill="#E0D4C0", outline="")
+        self._av_canvas.create_text(54, 54, text="👤", font=font(28), fill=TEXT_MUTED)
+
+    def _draw_white_ring(self):
+        """Draw a smooth anti-aliased white circle on a cream background matching the banner."""
+        from PIL import Image, ImageDraw as _ID
+        size = 108
+        scale = 4
+        s = size * scale
+        # parse banner background colour
+        g = int(_GRAD1.lstrip("#"), 16)
+        bg_rgb = ((g >> 16) & 255, (g >> 8) & 255, g & 255)
+        # start with solid cream canvas
+        img = Image.new("RGB", (s, s), bg_rgb)
+        # draw white circle on top
+        mask = Image.new("L", (s, s), 0)
+        _ID.Draw(mask).ellipse((0, 0, s - 1, s - 1), fill=255)
+        white = Image.new("RGB", (s, s), (255, 255, 255))
+        img.paste(white, mask=mask)
+        # downscale for smooth anti-aliased edges
+        img = img.resize((size, size), Image.LANCZOS)
+        ph = ImageTk.PhotoImage(img)
+        self._imgs.append(ph)
+        self._av_canvas._ring_ph = ph
+        self._av_canvas.create_image(0, 0, anchor="nw", image=ph, tags="ring")
 
     def _fetch_avatar_async(self, url):
         """Download the avatar in a background thread, then update the canvas on the main thread."""
@@ -380,14 +502,15 @@ class ProfileScreen(tk.Frame):
                 else:
                     return  # nothing to load
 
-                # crop to circle on white background (no black corners)
-                raw = raw.resize((100, 100), Image.LANCZOS).convert("RGBA")
-                bg  = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
-                mask = Image.new("L", (100, 100), 0)
-                ImageDraw.Draw(mask).ellipse((0, 0, 100, 100), fill=255)
-                bg.paste(raw, mask=mask)
-                final = bg.convert("RGB")
-
+                # crop to smooth circle at 4× scale, composited onto white (ring bg)
+                scale = 4
+                s = 100 * scale
+                big = raw.resize((s, s), Image.LANCZOS).convert("RGBA")
+                mask = Image.new("L", (s, s), 0)
+                ImageDraw.Draw(mask).ellipse((0, 0, s - 1, s - 1), fill=255)
+                bg  = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+                bg.paste(big, mask=mask)
+                final = bg.resize((100, 100), Image.LANCZOS)  # keep RGBA — transparent corners
                 # hand the finished PIL image back to the main thread
                 self.after(0, lambda img=final: self._apply_avatar_image(img))
 
@@ -400,10 +523,10 @@ class ProfileScreen(tk.Frame):
         """Called on the main thread to put the downloaded image onto the canvas."""
         try:
             ph = ImageTk.PhotoImage(pil_img)
-            self._imgs.append(ph)          # keep reference so GC doesn't collect it
+            self._imgs.append(ph)
             self._av_canvas.delete("all")
-            self._av_canvas.create_oval(0, 0, 100, 100, fill="#fff", outline="")
-            self._av_canvas.create_image(50, 50, image=ph, anchor="center")
+            self._draw_white_ring()
+            self._av_canvas.create_image(54, 54, image=ph, anchor="center")
         except Exception:
             pass
 
@@ -413,10 +536,10 @@ class ProfileScreen(tk.Frame):
             self._fetch_avatar_async(url)
         elif url and _os.path.exists(url):
             self._av_canvas.delete("all")
-            self._av_canvas.create_oval(0, 0, 100, 100, fill="#fff", outline="")
-            ph = _circle_img(url, 100, self._imgs)
+            self._draw_white_ring()
+            ph = _circle_img(url, 100, self._imgs)  # transparent corners
             if ph:
-                self._av_canvas.create_image(50, 50, image=ph, anchor="center")
+                self._av_canvas.create_image(54, 54, image=ph, anchor="center")
         else:
             self._draw_avatar_default()
 
@@ -427,11 +550,11 @@ class ProfileScreen(tk.Frame):
             return
         
         # show locally right away
-        ph = _circle_img(path, 100, self._imgs)
+        self._av_canvas.delete("all")
+        self._draw_white_ring()
+        ph = _circle_img(path, 100, self._imgs)  # transparent corners
         if ph:
-            self._av_canvas.delete("all")
-            self._av_canvas.create_oval(0, 0, 100, 100, fill="#fff", outline="")
-            self._av_canvas.create_image(50, 50, image=ph, anchor="center")
+            self._av_canvas.create_image(54, 54, image=ph, anchor="center")
 
         # upload to Supabase in background thread para hindi mag-freeze ang UI
         import threading
@@ -506,10 +629,46 @@ class ProfileScreen(tk.Frame):
     # ── Organization tab ──────────────────────────────────────────────
     def _tab_org(self):
         p = self._profile
-        card = tk.Frame(self._tab_content, bg=BG_WHITE,
-                        highlightbackground=_BORDER, highlightthickness=2,
-                        padx=24, pady=20)
-        card.pack(fill="both", expand=True)
+
+        # rounded card border using PIL canvas
+        R   = 12
+        PAD = R + 2
+        card_cv = tk.Canvas(self._tab_content, bg=BG_WHITE, bd=0, highlightthickness=0)
+        card_cv.pack(fill="both", expand=True)
+
+        card = tk.Frame(card_cv, bg=BG_WHITE, padx=24, pady=20)
+        card_win = card_cv.create_window(PAD, PAD, anchor="nw", window=card)
+
+        def _draw_card_border(event=None):
+            from PIL import Image, ImageDraw as _ID
+            w = card_cv.winfo_width()
+            h = card.winfo_reqheight()
+            if w < 4 or h < 4:
+                return
+            total_h = h + PAD * 2
+            card_cv.config(height=total_h)
+            card_cv.itemconfig(card_win, width=w - PAD * 2)
+            scale = 4
+            sw, sh = w * scale, total_h * scale
+            r = R * scale
+            cr = int(_BORDER.lstrip("#"), 16)
+            bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            _ID.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1], radius=r,
+                fill=(255, 255, 255, 255),
+                outline=bdr_rgb + (255,), width=8)
+            img = img.resize((w, total_h), Image.LANCZOS)
+            bg_img = Image.new("RGB", (w, total_h), (255, 255, 255))
+            bg_img.paste(img, mask=img.split()[3])
+            ph = ImageTk.PhotoImage(bg_img)
+            card_cv._ph = ph
+            card_cv.delete("card_border")
+            card_cv.create_image(0, 0, anchor="nw", image=ph, tags="card_border")
+            card_cv.tag_lower("card_border")
+
+        card.bind("<Configure>", lambda e: card_cv.after(0, _draw_card_border))
+        card_cv.bind("<Configure>", lambda e: card_cv.after(0, _draw_card_border))
 
         self._org_entries = {}
 
@@ -517,14 +676,59 @@ class ProfileScreen(tk.Frame):
             frm = tk.Frame(parent, bg=BG_WHITE)
             tk.Label(frm, text=label, bg=BG_WHITE, fg="#616161",
                      font=font(8), anchor="w").pack(anchor="w")
-            entry = tk.Entry(frm, font=font(10), bd=1, relief="solid",
+
+            # rounded entry wrapper
+            R   = 6
+            PAD = R + 1
+            H   = 36   # total canvas height
+            cv  = tk.Canvas(frm, bg=BG_WHITE, bd=0, highlightthickness=0, height=H)
+            cv.pack(fill="x", pady=(4, 0))
+
+            entry = tk.Entry(cv, font=font(10), bd=0, relief="flat",
                              bg="#F9F9F9", fg=TEXT_DARK,
-                             highlightbackground=_BORDER, highlightthickness=1)
-            # insert BEFORE setting readonly — readonly blocks insert()
+                             readonlybackground="#F9F9F9",
+                             disabledbackground="#F9F9F9",
+                             insertbackground=TEXT_DARK)
             entry.insert(0, value or "")
             if not editable:
                 entry.config(state="readonly")
-            entry.pack(fill="x", ipady=6, pady=(4, 0))
+            entry_win = cv.create_window(PAD, H // 2, anchor="w", window=entry)
+
+            def _draw_border(focused=False):
+                from PIL import Image, ImageDraw as _ID
+                w = cv.winfo_width()
+                if w < 4:
+                    return
+                cv.itemconfig(entry_win, width=w - PAD * 2)
+                scale = 4
+                sw, sh = w * scale, H * scale
+                r = R * scale
+                bdr_hex = "#E59E2C" if focused else _BORDER
+                cr = int(bdr_hex.lstrip("#"), 16)
+                bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+                FILL = "#F9F9F9"
+                bg_cr = int(FILL.lstrip("#"), 16)
+                bg_rgb = ((bg_cr >> 16) & 255, (bg_cr >> 8) & 255, bg_cr & 255)
+                img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+                _ID.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=bg_rgb + (255,),
+                    outline=bdr_rgb + (255,), width=4)
+                img = img.resize((w, H), Image.LANCZOS)
+                # composite onto the same fill colour so corners blend perfectly
+                bg_img = Image.new("RGB", (w, H), bg_rgb)
+                bg_img.paste(img, mask=img.split()[3])
+                ph = ImageTk.PhotoImage(bg_img)
+                cv._ph = ph
+                cv.config(bg=FILL)
+                cv.delete("border_bg")
+                cv.create_image(0, 0, anchor="nw", image=ph, tags="border_bg")
+                cv.tag_lower("border_bg")
+
+            cv.bind("<Configure>", lambda e: _draw_border())
+            entry.bind("<FocusIn>",  lambda e: _draw_border(focused=True))
+            entry.bind("<FocusOut>", lambda e: _draw_border(focused=False))
+
             return frm, entry
 
         # row 1: org name full width
@@ -588,16 +792,21 @@ class ProfileScreen(tk.Frame):
         self._cancel_btn.bind("<Leave>", lambda e: self._cancel_btn.config(bg="#E0E0E0"))
 
     def _enable_edit(self):
+        self._edit_mode = True
         self._save_err.config(text="")
         for key in ("org_short_name", "email"):
             e = self._org_entries.get(key)
             if e:
-                e.config(state="normal", bg="white")
+                e.config(state="normal", bg="#F9F9F9", readonlybackground="#F9F9F9")
         self._edit_btn.pack_forget()
         self._save_btn.pack(side="left", padx=(0, 8))
         self._cancel_btn.pack(side="left")
+        # enable change photo button
+        if hasattr(self, "_change_btn"):
+            self._change_btn.config(bg=_BORDER, fg=TEXT_DARK, cursor="hand2")
 
     def _cancel_edit(self):
+        self._edit_mode = False
         p = self._profile
         self._save_err.config(text="")
         for key in ("org_short_name", "email"):
@@ -606,10 +815,13 @@ class ProfileScreen(tk.Frame):
                 e.config(state="normal")
                 e.delete(0, "end")
                 e.insert(0, p.get(key, ""))
-                e.config(state="readonly", bg="#F9F9F9")
+                e.config(state="readonly", bg="#F9F9F9", readonlybackground="#F9F9F9")
         self._save_btn.pack_forget()
         self._cancel_btn.pack_forget()
         self._edit_btn.pack(side="left")
+        # disable change photo button
+        if hasattr(self, "_change_btn"):
+            self._change_btn.config(bg=_GRAD1, fg="#AAAAAA", cursor="arrow")
 
     def _save_profile(self):
         """Push org_short_name + email to Supabase, refresh local cache."""
@@ -631,7 +843,7 @@ class ProfileScreen(tk.Frame):
             self._profile["org_short_name"] = short
             self._profile["email"]          = email
             self._save_err.config(text="")
-            self._cancel_edit()          # lock fields, swap buttons back
+            self._cancel_edit()          # lock fields, swap buttons back — also disables change photo
             self._save_btn.config(text="Save Changes", bg=_GREEN)
             # refresh overview banner labels
             self._refresh_overview_labels()

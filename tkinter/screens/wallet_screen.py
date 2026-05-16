@@ -195,31 +195,130 @@ class WalletScreen(tk.Frame):
         tk.Label(hdr, text="Wallets", bg=BG_WHITE, fg=TEXT_DARK,
                  font=("Playfair Display Italic", 22)).pack(side="left")
 
-        # academic year dropdown
+        # academic year dropdown — fully custom pill button, no ttk rectangle
         self._year_var = tk.StringVar(value="All years")
-        self._year_menu = ttk.Combobox(hdr, textvariable=self._year_var,
-                                       state="readonly", width=12,
-                                       font=font(9))
-        self._year_menu.pack(side="right", padx=(6, 0))
 
-        # search bar
+        PILL_H  = 32
+        BDR_CLR = _FILTER_BDR
+        HOV_CLR = _FILTER_ACT
+
+        def _make_pill_bg(cv, w, h, border):
+            from PIL import Image, ImageDraw as _ID
+            scale = 4
+            sw, sh, r = w * scale, h * scale, (h // 2) * scale
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            cr = int(border.lstrip("#"), 16)
+            bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            _ID.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1], radius=r,
+                fill=(255, 255, 255, 255),
+                outline=bdr_rgb + (255,), width=6)
+            img = img.resize((w, h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            cv._pill_ph = ph
+            cv.delete("pill_bg")
+            cv.create_image(0, 0, anchor="nw", image=ph, tags="pill_bg")
+            cv.tag_lower("pill_bg")
+
+        year_cv = tk.Canvas(hdr, height=PILL_H, width=130,
+                            bg=BG_WHITE, bd=0, highlightthickness=0, cursor="hand2")
+        year_cv.pack(side="right", padx=(6, 0))
+
+        # text + caret drawn directly on the canvas — no ttk widget, no rectangle
+        def _redraw_year_pill(border=BDR_CLR):
+            w = year_cv.winfo_width() or 130
+            _make_pill_bg(year_cv, w, PILL_H, border)
+            year_cv.delete("year_text")
+            year_cv.create_text(12, PILL_H // 2, anchor="w",
+                                text=self._year_var.get(),
+                                fill=TEXT_DARK, font=font(9),
+                                tags="year_text")
+            year_cv.delete("year_caret")
+            year_cv.create_text(w - 10, PILL_H // 2, anchor="e",
+                                text="▼", fill="#828282", font=font(7),
+                                tags="year_caret")
+
+        year_cv.bind("<Configure>", lambda e: _redraw_year_pill())
+
+        # custom dropdown frame
+        _year_drop = tk.Frame(self._box, bg="white",
+                              highlightbackground=_FILTER_BDR, highlightthickness=1)
+        _year_drop._open = False
+        _year_drop_items = []   # populated after wallets load
+
+        def _close_year_drop():
+            _year_drop.place_forget()
+            _year_drop._open = False
+            _redraw_year_pill(BDR_CLR)
+
+        def _select_year(val):
+            self._year_var.set(val)
+            _redraw_year_pill(BDR_CLR)
+            _close_year_drop()
+
+        def _toggle_year_drop(e=None):
+            if _year_drop._open:
+                _close_year_drop()
+                return
+            # rebuild items
+            for w in _year_drop.winfo_children():
+                w.destroy()
+            for val in _year_drop_items:
+                item = tk.Label(_year_drop, text=val, bg="white", fg=TEXT_DARK,
+                                font=font(9), padx=14, pady=6, anchor="w", cursor="hand2")
+                item.pack(fill="x")
+                item.bind("<Enter>", lambda e, b=item: b.config(bg="#F5F1E8"))
+                item.bind("<Leave>", lambda e, b=item: b.config(bg="white"))
+                item.bind("<Button-1>", lambda e, v=val: _select_year(v))
+            # position below the pill
+            year_cv.update_idletasks()
+            bx = year_cv.winfo_rootx() - self._box.winfo_rootx()
+            by = year_cv.winfo_rooty() - self._box.winfo_rooty() + PILL_H + 2
+            _year_drop.place(in_=self._box, x=bx, y=by, width=130)
+            _year_drop.lift()
+            _year_drop._open = True
+            _redraw_year_pill(HOV_CLR)
+
+        year_cv.bind("<Button-1>", _toggle_year_drop)
+
+        # keep a reference so we can populate after wallets load
+        self._year_drop_items = _year_drop_items
+        self._redraw_year_pill = _redraw_year_pill
+        self._year_drop = _year_drop
+
+        # search bar — pill-shaped canvas with embedded entry
         self._search_var = tk.StringVar()
-        search = tk.Entry(hdr, textvariable=self._search_var,
-                          font=font(9), bd=1, relief="solid",
-                          highlightbackground=_FILTER_BDR,
-                          highlightthickness=1)
+
+        srch_cv = tk.Canvas(hdr, height=PILL_H, width=180,
+                            bg=BG_WHITE, bd=0, highlightthickness=0)
+        srch_cv.pack(side="right", padx=(0, 0))
+
+        srch_icon = tk.Label(srch_cv, text="🔍", bg="white",
+                             fg="#9A8070", font=font(9))
+        srch_cv.create_window(10, PILL_H // 2, anchor="w", window=srch_icon)
+
+        search = tk.Entry(srch_cv, textvariable=self._search_var,
+                          font=font(9), bd=0, relief="flat",
+                          bg="white", fg=TEXT_MUTED,
+                          insertbackground=TEXT_DARK, width=14)
         search.insert(0, "Search wallet...")
-        search.config(fg=TEXT_MUTED)
-        search.pack(side="right", ipady=5, ipadx=8)
+        srch_cv.create_window(32, PILL_H // 2, anchor="w", window=search)
+
+        srch_cv.bind("<Configure>",
+                     lambda e: _make_pill_bg(srch_cv, e.width, PILL_H, BDR_CLR))
 
         def _focus_in(e):
             if search.get() == "Search wallet...":
                 search.delete(0, "end")
                 search.config(fg=TEXT_DARK)
+            _make_pill_bg(srch_cv, srch_cv.winfo_width(), PILL_H, HOV_CLR)
+
         def _focus_out(e):
             if not search.get():
                 search.insert(0, "Search wallet...")
                 search.config(fg=TEXT_MUTED)
+            _make_pill_bg(srch_cv, srch_cv.winfo_width(), PILL_H, BDR_CLR)
+
         search.bind("<FocusIn>",  _focus_in)
         search.bind("<FocusOut>", _focus_out)
 
@@ -242,7 +341,8 @@ class WalletScreen(tk.Frame):
 
         # build academic year list
         acad_years = sorted(set(w["acad_year"] for w in all_wallets), reverse=True)
-        self._year_menu["values"] = ["All years"] + acad_years
+        self._year_drop_items.clear()
+        self._year_drop_items.extend(["All years"] + acad_years)
 
         # default to current academic year
         now = datetime.now()
@@ -252,6 +352,7 @@ class WalletScreen(tk.Frame):
             self._year_var.set(cur_ay)
         else:
             self._year_var.set(acad_years[0] if acad_years else "All years")
+        self._redraw_year_pill()
 
         # scrollable area
         canvas = tk.Canvas(self._box, bg=BG_WHITE, bd=0, highlightthickness=0)
@@ -2014,6 +2115,7 @@ class WalletScreen(tk.Frame):
             self._tx_item(inner, t)
 
     def _tx_item(self, parent, t):
+        from PIL import Image, ImageDraw, ImageTk as _ITk
         date  = t.get("date_issued", "")[:10]
         desc  = t.get("description") or "—"
         qty   = t.get("quantity", 1)
@@ -2022,40 +2124,74 @@ class WalletScreen(tk.Frame):
         amt   = total if t["kind"] == "income" else -total
         qty_line = f"{price:,.2f} x {qty} ({total:,.2f})"
 
-        card = tk.Frame(parent, bg=BG_WHITE,
-                        highlightbackground=_FILTER_BDR,
-                        highlightthickness=1, padx=14, pady=10)
-        card.pack(fill="x", pady=4, padx=2)
-        card.bind("<Enter>", lambda e: card.config(highlightbackground=_ACTIVE_TAB))
-        card.bind("<Leave>", lambda e: card.config(highlightbackground=_FILTER_BDR))
+        try:
+            month_label = datetime.strptime(date, "%Y-%m-%d").strftime("%B").upper()
+        except Exception:
+            month_label = date
+
+        if t["kind"] == "income":
+            income_type = t.get("income_type") or "—"
+            subtitle = f"{qty_line}  ·  {income_type}  ·  {desc}"
+        else:
+            particulars = t.get("particulars") or "—"
+            subtitle = f"{qty_line}  ·  {particulars}  ·  {desc}"
+
+        R       = 8
+        B       = 2
+        PAD     = R + B        # = 10
+        BDR_CLR = _FILTER_BDR
+        HOV_CLR = _ACTIVE_TAB
+
+        cv = tk.Canvas(parent, bg=BG_WHITE, bd=0, highlightthickness=0)
+        cv.pack(fill="x", pady=2, padx=2)
+
+        card = tk.Frame(cv, bg=BG_WHITE, padx=14, pady=10)
+        card_win = cv.create_window(PAD, PAD, anchor="nw", window=card)
+
+        def _draw(hover=False):
+            bw = cv.winfo_width()
+            ch = card.winfo_reqheight()
+            if bw < 8 or ch < 4:
+                return
+            total_h = ch + PAD * 2
+            cv.config(height=total_h)
+            cv.itemconfig(card_win, width=bw - PAD * 2)
+            bdr = HOV_CLR if hover else BDR_CLR
+            scale = 4
+            sw, sh = bw * scale, total_h * scale
+            r = R * scale
+            cr = int(bdr.lstrip("#"), 16)
+            bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [B * scale, B * scale, sw - 1 - B * scale, sh - 1 - B * scale],
+                radius=r,
+                fill=(255, 255, 255, 255),
+                outline=bdr_rgb + (255,), width=B * scale)
+            img = img.resize((bw, total_h), Image.LANCZOS)
+            bg_img = Image.new("RGB", (bw, total_h), (255, 255, 255))
+            bg_img.paste(img, mask=img.split()[3])
+            ph = _ITk.PhotoImage(bg_img)
+            cv._ph = ph
+            cv.delete("card_bg")
+            cv.create_image(0, 0, anchor="nw", image=ph, tags="card_bg")
+            cv.tag_lower("card_bg")
+
+        card.bind("<Configure>", lambda e: cv.after(0, _draw))
+        cv.bind("<Configure>",   lambda e: cv.after(0, _draw))
+        for w in (cv, card):
+            w.bind("<Enter>", lambda e: _draw(hover=True))
+            w.bind("<Leave>", lambda e: _draw(hover=False))
 
         left = tk.Frame(card, bg=BG_WHITE)
         left.pack(side="left", fill="x", expand=True)
 
-        if t["kind"] == "income":
-            income_type = t.get("income_type") or "—"
-            try:
-                month_label = datetime.strptime(date, "%Y-%m-%d").strftime("%B").upper()
-            except Exception:
-                month_label = date
-            tk.Label(left, text=month_label, bg=BG_WHITE, fg=TEXT_DARK,
-                     font=font(9, "bold"), anchor="w").pack(anchor="w")
-            tk.Label(left, text=f"{qty_line}  ·  {income_type}  ·  {desc}",
-                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(8), anchor="w").pack(anchor="w")
-            tk.Label(left, text=date, bg=BG_WHITE, fg="#999999",
-                     font=font(7), anchor="w").pack(anchor="w")
-        else:
-            particulars = t.get("particulars") or "—"
-            try:
-                month_label = datetime.strptime(date, "%Y-%m-%d").strftime("%B").upper()
-            except Exception:
-                month_label = date
-            tk.Label(left, text=month_label, bg=BG_WHITE, fg=TEXT_DARK,
-                     font=font(9, "bold"), anchor="w").pack(anchor="w")
-            tk.Label(left, text=f"{qty_line}  ·  {particulars}  ·  {desc}",
-                     bg=BG_WHITE, fg=TEXT_MUTED, font=font(8), anchor="w").pack(anchor="w")
-            tk.Label(left, text=date, bg=BG_WHITE, fg="#999999",
-                     font=font(7), anchor="w").pack(anchor="w")
+        tk.Label(left, text=month_label, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=font(9, "bold"), anchor="w").pack(anchor="w")
+        tk.Label(left, text=subtitle, bg=BG_WHITE, fg=TEXT_MUTED,
+                 font=font(8), anchor="w").pack(anchor="w")
+        tk.Label(left, text=date, bg=BG_WHITE, fg="#999999",
+                 font=font(7), anchor="w").pack(anchor="w")
 
         right = tk.Frame(card, bg=BG_WHITE)
         right.pack(side="right", anchor="center")
@@ -3105,7 +3241,8 @@ class WalletScreen(tk.Frame):
                 canvas.yview_scroll(int(-1*(e.delta/120)), "units")
             except Exception:
                 pass
-        canvas.bind_all("<MouseWheel>", _scroll)
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _scroll))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         canvas.bind("<Destroy>",
                     lambda e: canvas.unbind_all("<MouseWheel>")
                     if e.widget is canvas else None)

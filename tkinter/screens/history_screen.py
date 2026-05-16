@@ -27,6 +27,68 @@ class HistoryScreen(tk.Frame):
         self._filter = "all"
         self._build()
 
+    def _make_pill_btn(self, parent, text, bg_hex, hover_hex,
+                       fg="white", width=None, height=36,
+                       font_spec=None, side=None, padx=0, pady=0,
+                       command=None):
+        """PIL-drawn fully-rounded pill button — same technique as wallet screen."""
+        from PIL import Image, ImageDraw as _ID, ImageTk as _ITk
+        fnt = font_spec or font(9, "bold")
+        cv = tk.Canvas(parent, bd=0, highlightthickness=0,
+                       bg=parent.cget("bg"), cursor="hand2",
+                       height=height)
+        if width:
+            cv.config(width=width)
+        if side is not None:
+            cv.pack(side=side, padx=padx, pady=pady)
+        else:
+            cv.pack(padx=padx, pady=pady)
+
+        def _draw(hover=False):
+            cv.delete("all")
+            bw = cv.winfo_width() or (width or 80)
+            bh = cv.winfo_height() or height
+            if bw < 4 or bh < 4:
+                return
+            active_bg = getattr(cv, "_active_bg", None)
+            active_fg = getattr(cv, "_active_fg", None)
+            is_active = active_bg is not None
+            colour    = active_bg if is_active else (hover_hex if hover else bg_hex)
+            txt_colour = active_fg if is_active else fg
+            # support dynamic text (e.g. month label updates)
+            label = getattr(cv, "_label_text", text)
+            scale = 4
+            sw, sh = bw * scale, bh * scale
+            r = sh // 2          # fully rounded pill
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            cr = int(colour.lstrip("#"), 16)
+            rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            if not is_active and not hover:
+                bdr_hex = _FILTER_BORDER.lstrip("#")
+                bdr_rgb = (int(bdr_hex[0:2], 16), int(bdr_hex[2:4], 16), int(bdr_hex[4:6], 16))
+                _ID.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=rgb + (255,),
+                    outline=bdr_rgb + (255,), width=6)
+            else:
+                _ID.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=rgb + (255,))
+            img = img.resize((bw, bh), Image.LANCZOS)
+            ph = _ITk.PhotoImage(img)
+            cv._ph = ph
+            cv.create_image(0, 0, anchor="nw", image=ph)
+            cv.create_text(bw // 2, bh // 2, text=label,
+                           fill=txt_colour, font=fnt, anchor="center")
+
+        cv._redraw = _draw
+        cv.bind("<Configure>", lambda e: _draw())
+        cv.bind("<Enter>",     lambda e: _draw(hover=True))
+        cv.bind("<Leave>",     lambda e: _draw(hover=False))
+        if command:
+            cv.bind("<Button-1>", lambda e: command())
+        return cv
+
     def _build(self):
         from PIL import Image, ImageDraw
         outer = tk.Frame(self, bg=BG_CREAM, padx=12, pady=16)
@@ -74,38 +136,43 @@ class HistoryScreen(tk.Frame):
         nav_row = tk.Frame(self._box, bg=BG_WHITE)
         nav_row.pack(pady=(10, 0))
 
-        prev = tk.Label(nav_row, text="‹", bg=_MONTH_NAV_BG, fg=TEXT_DARK,
-                        font=font(18), width=3, cursor="hand2")
-        prev.pack(side="left", padx=(0, 8))
-        prev.bind("<Button-1>", lambda e: self._change_month(-1))
-        prev.bind("<Enter>",    lambda e: prev.config(bg=_MONTH_NAV_HOV, fg="white"))
-        prev.bind("<Leave>",    lambda e: prev.config(bg=_MONTH_NAV_BG,  fg=TEXT_DARK))
+        prev_cv = self._make_pill_btn(
+            nav_row, "‹",
+            bg_hex=_MONTH_NAV_BG, hover_hex=_MONTH_NAV_HOV,
+            fg=TEXT_DARK, width=38, height=36,
+            font_spec=font(16),
+            side="left", padx=(0, 6),
+            command=lambda: self._change_month(-1))
 
-        self._month_lbl = tk.Label(nav_row, text=self._month_str(),
-                                   bg=_MONTH_BG, fg=TEXT_DARK,
-                                   font=font(11, "bold"), padx=28, pady=8)
-        self._month_lbl.pack(side="left")
+        # month label as a pill — stored so we can redraw with updated text
+        self._month_cv = self._make_pill_btn(
+            nav_row, self._month_str(),
+            bg_hex=_MONTH_BG, hover_hex=_MONTH_BG,
+            fg=TEXT_DARK, width=160, height=36,
+            font_spec=font(11, "bold"),
+            side="left", padx=0)
 
-        nxt = tk.Label(nav_row, text="›", bg=_MONTH_NAV_BG, fg=TEXT_DARK,
-                       font=font(18), width=3, cursor="hand2")
-        nxt.pack(side="left", padx=(8, 0))
-        nxt.bind("<Button-1>", lambda e: self._change_month(+1))
-        nxt.bind("<Enter>",    lambda e: nxt.config(bg=_MONTH_NAV_HOV, fg="white"))
-        nxt.bind("<Leave>",    lambda e: nxt.config(bg=_MONTH_NAV_BG,  fg=TEXT_DARK))
+        nxt_cv = self._make_pill_btn(
+            nav_row, "›",
+            bg_hex=_MONTH_NAV_BG, hover_hex=_MONTH_NAV_HOV,
+            fg=TEXT_DARK, width=38, height=36,
+            font_spec=font(16),
+            side="left", padx=(6, 0),
+            command=lambda: self._change_month(+1))
 
-        # filter tabs
+        # filter tabs — pill-shaped, same rounding as wallet screen
         flt_row = tk.Frame(self._box, bg=BG_WHITE)
         flt_row.pack(pady=(18, 0))
         self._filter_btns = {}
         for key, label in [("all","All"), ("income","Income"), ("expense","Expense")]:
-            btn = tk.Label(flt_row, text=label, bg=BG_WHITE, fg=TEXT_DARK,
-                           font=font(10), padx=24, pady=8, cursor="hand2",
-                           highlightbackground=_FILTER_BORDER, highlightthickness=2)
-            btn.pack(side="left", padx=6)
-            btn.bind("<Button-1>", lambda e, k=key: self._set_filter(k))
-            btn.bind("<Enter>",    lambda e, b=btn, k=key: b.config(bg=_FILTER_HOV) if k != self._filter else None)
-            btn.bind("<Leave>",    lambda e, b=btn, k=key: b.config(bg=_FILTER_ACTIVE if k == self._filter else BG_WHITE))
-            self._filter_btns[key] = btn
+            cv = self._make_pill_btn(
+                flt_row, label,
+                bg_hex=BG_WHITE, hover_hex=_FILTER_HOV,
+                fg=TEXT_DARK, width=80, height=34,
+                font_spec=font(9),
+                side="left", padx=5)
+            cv.bind("<Button-1>", lambda e, k=key: self._set_filter(k))
+            self._filter_btns[key] = cv
         self._update_filter_styles()
 
         # list area
@@ -148,7 +215,8 @@ class HistoryScreen(tk.Frame):
                 canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
             except Exception:
                 pass
-        canvas.bind_all("<MouseWheel>", _scroll)
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _scroll))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         canvas.bind("<Destroy>",
                     lambda e: canvas.unbind_all("<MouseWheel>") if e.widget is canvas else None)
 
@@ -192,41 +260,43 @@ class HistoryScreen(tk.Frame):
         color = _INCOME_CLR if amt >= 0 else _EXPENSE_CLR
         sign  = "+" if amt >= 0 else "-"
 
-        RADIUS  = 12
+        RADIUS  = 8
         BDR_CLR = "#ECDDC6"
         HOV_CLR = "#E59E2C"
-        INSET   = 2   # border thickness in screen pixels
+        B       = 2    # border thickness
+        PAD     = RADIUS + B   # = 10 — keeps frame clear of corner arc pixels
 
         cv = tk.Canvas(parent, bg=BG_WHITE, bd=0, highlightthickness=0)
-        cv.pack(fill="x", pady=4, padx=4)
+        cv.pack(fill="x", pady=2, padx=4)
 
         content = tk.Frame(cv, bg=BG_WHITE, padx=14, pady=10)
-        content_win = cv.create_window(INSET, INSET, anchor="nw", window=content)
+        content_win = cv.create_window(PAD, PAD, anchor="nw", window=content)
 
         def _draw(hover=False):
             bw = cv.winfo_width()
             ch = content.winfo_reqheight()
             if bw < 8 or ch < 4:
                 return
-            bh = ch + INSET * 2
-            cv.config(height=bh)
-            cv.itemconfig(content_win, width=bw - INSET * 2)
+            total_h = ch + PAD * 2
+            cv.config(height=total_h)
+            cv.itemconfig(content_win, width=bw - PAD * 2)
 
             bdr = HOV_CLR if hover else BDR_CLR
-            # render at 8× scale for smooth anti-aliased corners
-            scale = 8
-            sw, sh = bw * scale, bh * scale
+            scale = 4
+            sw, sh = bw * scale, total_h * scale
             r = RADIUS * scale
             cr = int(bdr.lstrip("#"), 16)
             bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
-            # use solid RGB (no alpha) — parent bg is white so no bleed-through
-            img = Image.new("RGB", (sw, sh), (255, 255, 255))
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
             ImageDraw.Draw(img).rounded_rectangle(
-                [0, 0, sw - 1, sh - 1], radius=r,
-                fill=(255, 255, 255),
-                outline=bdr_rgb, width=10)
-            img = img.resize((bw, bh), Image.LANCZOS)
-            ph = _ITk.PhotoImage(img)
+                [B * scale, B * scale, sw - 1 - B * scale, sh - 1 - B * scale],
+                radius=r,
+                fill=(255, 255, 255, 255),
+                outline=bdr_rgb + (255,), width=B * scale)
+            img = img.resize((bw, total_h), Image.LANCZOS)
+            bg_img = Image.new("RGB", (bw, total_h), (255, 255, 255))
+            bg_img.paste(img, mask=img.split()[3])
+            ph = _ITk.PhotoImage(bg_img)
             cv._ph = ph
             cv.delete("bg")
             cv.create_image(0, 0, anchor="nw", image=ph, tags="bg")
@@ -270,7 +340,11 @@ class HistoryScreen(tk.Frame):
         elif self._month < 1:
             self._month = 12
             self._year -= 1
-        self._month_lbl.config(text=self._month_str())
+        # redraw the month pill with updated text
+        if hasattr(self, "_month_cv"):
+            self._month_cv._label_text = self._month_str()
+            if hasattr(self._month_cv, "_redraw"):
+                self._month_cv.after(0, self._month_cv._redraw)
         self._refresh()
 
     def _set_filter(self, key):
@@ -279,10 +353,12 @@ class HistoryScreen(tk.Frame):
         self._refresh()
 
     def _update_filter_styles(self):
-        for k, btn in self._filter_btns.items():
+        for k, cv in self._filter_btns.items():
             if k == self._filter:
-                btn.config(bg=_FILTER_ACTIVE, fg="white",
-                           highlightbackground=_FILTER_ACTIVE)
+                cv._active_bg = _FILTER_ACTIVE
+                cv._active_fg = "white"
             else:
-                btn.config(bg=BG_WHITE, fg=TEXT_DARK,
-                           highlightbackground=_FILTER_BORDER)
+                cv._active_bg = None
+                cv._active_fg = None
+            if hasattr(cv, "_redraw"):
+                cv.after(0, cv._redraw)

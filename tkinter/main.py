@@ -258,6 +258,21 @@ class PockiTrackApp(tk.Tk):
             _imgs.append(ph)
             return ph
 
+        def _make_circle_avatar(src_img, size):
+            """Render src_img as a smooth anti-aliased circle at 4× scale."""
+            scale = 4
+            s = size * scale
+            # resize source at high resolution
+            big = src_img.resize((s, s), Image.LANCZOS).convert("RGBA")
+            # draw a smooth circular mask at high res
+            mask = Image.new("L", (s, s), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, s - 1, s - 1), fill=255)
+            # composite onto white background
+            bg = Image.new("RGBA", (s, s), (255, 255, 255, 255))
+            bg.paste(big, mask=mask)
+            # downscale with LANCZOS for smooth edges
+            return bg.resize((size, size), Image.LANCZOS).convert("RGB")
+
         # ─── Profile pill ────────────────────────────────────────────
         org_name = ""
         if self._org:
@@ -298,7 +313,6 @@ class PockiTrackApp(tk.Tk):
 
         def _draw_avatar():
             av_cv.delete("all")
-            av_cv.create_oval(0, 0, av_size, av_size, fill="#ECDDC6", outline="")
 
             # Try to load profile photo from DB first
             photo_img = None
@@ -311,18 +325,8 @@ class PockiTrackApp(tk.Tk):
                         import urllib.request, io
                         with urllib.request.urlopen(photo_url, timeout=5) as resp:
                             data = resp.read()
-                        img = Image.open(io.BytesIO(data)).resize(
-                            (av_size, av_size), Image.LANCZOS).convert("RGBA")
-                        bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
-                        mask = Image.new("L",    (av_size, av_size), 0)
-                        ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
-                        bg.paste(img, mask=mask)
-                        ph = ImageTk.PhotoImage(bg.convert("RGB"))
-                        _imgs.append(ph)
-                        av_cv._ph = ph
-                        av_cv.create_image(av_size//2, av_size//2,
-                                        image=ph, anchor="center")
-                        photo_img = ph
+                        raw = Image.open(io.BytesIO(data)).convert("RGBA")
+                        photo_img = _make_circle_avatar(raw, av_size)
             except Exception:
                 pass
 
@@ -331,19 +335,17 @@ class PockiTrackApp(tk.Tk):
                 default = _os.path.join(assets, "default_avatar.png")
                 if _os.path.exists(default):
                     try:
-                        img = Image.open(default).resize(
-                            (av_size, av_size), Image.LANCZOS).convert("RGBA")
-                        bg   = Image.new("RGBA", (av_size, av_size), (255,255,255,255))
-                        mask = Image.new("L",    (av_size, av_size), 0)
-                        ImageDraw.Draw(mask).ellipse((0,0,av_size,av_size), fill=255)
-                        bg.paste(img, mask=mask)
-                        ph = ImageTk.PhotoImage(bg.convert("RGB"))
-                        _imgs.append(ph)
-                        av_cv._ph = ph
-                        av_cv.create_image(av_size//2, av_size//2,
-                                        image=ph, anchor="center")
+                        raw = Image.open(default).convert("RGBA")
+                        photo_img = _make_circle_avatar(raw, av_size)
                     except Exception:
                         pass
+
+            if photo_img:
+                ph = ImageTk.PhotoImage(photo_img)
+                _imgs.append(ph)
+                av_cv._ph = ph
+                av_cv.create_image(av_size // 2, av_size // 2,
+                                   image=ph, anchor="center")
 
         _draw_avatar()
 
