@@ -371,9 +371,16 @@ class HomeScreen(tk.Frame):
         tk.Label(det, text="Budget Used", bg=BG_WHITE,
                  fg=TEXT_MUTED, font=font(7), anchor="w").pack(anchor="w", pady=(3, 0))
 
+        # "Php used / Php budget" right-aligned, just above the progress bar
+        used_str   = f"Php {used:,.0f}"
+        budget_str = f"Php {budget:,.0f}"
+        tk.Label(det, text=f"{used_str} / {budget_str}",
+                 bg=BG_WHITE, fg="#616161", font=font(7),
+                 anchor="e").pack(fill="x", pady=(2, 0))
+
         # progress bar
         pb_outer = tk.Frame(det, bg="#F1F1F1", height=7)
-        pb_outer.pack(fill="x", pady=(3, 0))
+        pb_outer.pack(fill="x", pady=(0, 0))
         pb_outer.pack_propagate(False)
 
         def _draw_bar(event, pct=progress, frm=pb_outer):
@@ -389,20 +396,13 @@ class HomeScreen(tk.Frame):
 
         pb_outer.bind("<Configure>", _draw_bar)
 
-        # "Php used / Php budget" right-aligned, just below the progress bar
-        used_str   = f"Php {used:,.0f}"
-        budget_str = f"Php {budget:,.0f}"
-        tk.Label(det, text=f"{used_str} / {budget_str}",
-                 bg=BG_WHITE, fg="#616161", font=font(7),
-                 anchor="e").pack(fill="x", pady=(2, 4))
-
-        # income / expense stats row
+        # Income (left) and Expenses (right) on the same row below the progress bar
         stats = tk.Frame(det, bg=BG_WHITE)
-        stats.pack(anchor="w")
+        stats.pack(fill="x", pady=(2, 4))
         tk.Label(stats, text=f"Income: Php {total_income:,.2f}",
-                 bg=BG_WHITE, fg="#2E7D32", font=font(7)).pack(side="left", padx=(0, 10))
+                 bg=BG_WHITE, fg="#2E7D32", font=font(7)).pack(side="left")
         tk.Label(stats, text=f"Expenses: Php {total_expense:,.2f}",
-                 bg=BG_WHITE, fg="#C62828", font=font(7)).pack(side="left")
+                 bg=BG_WHITE, fg="#C62828", font=font(7)).pack(side="right")
 
     # ── Transaction History panel ─────────────────────────────────────
     def _build_history(self, parent, transactions):

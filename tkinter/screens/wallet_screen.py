@@ -142,6 +142,68 @@ class WalletScreen(tk.Frame):
             cv.bind("<Button-1>", lambda e: command())
         return cv
 
+    def _make_rounded_modal(self, overlay, width=420, radius=18):
+        """
+        Rounded-corner white modal card with no visible sharp corners.
+
+        Uses a tk.Canvas as the modal container (not a Frame).
+        The canvas bg matches the overlay bg so corners are invisible.
+        All content is packed into an inner Frame embedded via create_window,
+        inset by `radius` px so the frame's rectangular corners sit behind
+        the canvas's own background — never visible.
+        Returns the inner tk.Frame where you pack your content.
+        """
+        from PIL import Image, ImageDraw
+
+        # Match the overlay background so canvas corners are invisible
+        try:
+            overlay_bg = overlay.cget("bg")
+        except Exception:
+            overlay_bg = "black"
+
+        # The modal canvas — bg matches overlay so corners disappear
+        cv = tk.Canvas(overlay, bd=0, highlightthickness=0,
+                       bg=overlay_bg, width=width + radius * 2)
+        cv.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Inner frame inset by radius so its rectangular corners are hidden
+        # behind the canvas bg (which matches the overlay)
+        inner = tk.Frame(cv, bg=BG_WHITE)
+        win = cv.create_window(radius, radius, anchor="nw", window=inner)
+
+        def _redraw(event=None):
+            ih = inner.winfo_reqheight()
+            if ih < 10:
+                cv.after(20, _redraw)
+                return
+
+            total_w = width + radius * 2
+            total_h = ih + radius * 2
+            cv.config(width=total_w, height=total_h)
+            cv.itemconfig(win, width=width)
+
+            # Draw rounded white card filling the full canvas size
+            scale = 4
+            sw, sh = total_w * scale, total_h * scale
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [0, 0, sw - 1, sh - 1],
+                radius=radius * scale,
+                fill=(255, 255, 255, 255),
+                outline=(224, 212, 192, 255),
+                width=scale,
+            )
+            img = img.resize((total_w, total_h), Image.LANCZOS)
+            ph = ImageTk.PhotoImage(img)
+            cv._modal_ph = ph
+            cv.delete("modal_bg")
+            cv.create_image(0, 0, anchor="nw", image=ph, tags="modal_bg")
+            cv.tag_lower("modal_bg")
+
+        inner.bind("<Configure>", lambda e: _redraw())
+        cv.after(30, _redraw)
+        return inner
+
     # ── outer scaffold ────────────────────────────────────────────────
     def _build(self):
         outer = tk.Frame(self, bg=BG_CREAM, padx=12, pady=16)
@@ -502,9 +564,9 @@ class WalletScreen(tk.Frame):
         back.bind("<Leave>",    lambda e: back.config(fg=_BTN_BROWN))
 
         # title — month name only, Playfair Display Italic
-        month_title = wallet.get("month_name", "").capitalize()
+        month_title = wallet.get("month_name", "").upper()
         tk.Label(hdr, text=month_title, bg=BG_WHITE, fg=TEXT_DARK,
-                 font=("Playfair Display Italic", 16)).pack(side="left", padx=(8, 0))
+                 font=("Playfair Display Italic", 25)).pack(side="left", padx=(8, 0))
 
         # —— Add budget secondary button (right side) — rounded pill ——
         try:
@@ -659,27 +721,30 @@ class WalletScreen(tk.Frame):
         if _bg_photo:
             ov_canvas.create_image(0, 0, anchor="nw", image=_bg_photo)
             ov_canvas._bg_photo = _bg_photo
+            ov_canvas._bg_pil = screenshot
         else:
             ov_canvas.config(bg="black")
             ov_canvas.create_rectangle(0, 0, w, h, fill="black", stipple="gray50", outline="")
         ov_canvas.bind("<Button-1>", lambda e: overlay.destroy())
 
-        modal = tk.Frame(overlay, bg=BG_WHITE, padx=28, pady=24,
-                         highlightbackground="#E0D4C0", highlightthickness=1)
-        modal.place(relx=0.5, rely=0.5, anchor="center", width=420)
+        modal = self._make_rounded_modal(overlay, width=360)
+        modal.config(padx=20, pady=6)
         modal.bind("<Button-1>", lambda e: "break")
 
         hdr = tk.Frame(modal, bg=BG_WHITE)
-        hdr.pack(fill="x", pady=(0, 4))
+        hdr.pack(fill="x", pady=0)
+
+        title_row = tk.Frame(hdr, bg=BG_WHITE)
+        title_row.pack(fill="x")
 
         if is_edit:
             title_text = "Edit Income Transaction" if kind == "income" else "Edit Expense Transaction"
         else:
             title_text = "Add Income Transaction" if kind == "income" else "Add Expense Transaction"
-        tk.Label(hdr, text=title_text, bg=BG_WHITE, fg=TEXT_DARK,
-                 font=font(12, "bold")).pack(side="left")
+        tk.Label(title_row, text=title_text, bg=BG_WHITE, fg=TEXT_DARK,
+                 font=("Playfair Display Bold", 12)).pack(side="left")
 
-        close_btn = tk.Label(hdr, text="×", bg=BG_WHITE, fg="#616161",
+        close_btn = tk.Label(title_row, text="×", bg=BG_WHITE, fg="#616161",
                              font=("Arial", 16), cursor="hand2")
         close_btn.pack(side="right")
         close_btn.bind("<Button-1>", lambda e: overlay.destroy())
@@ -688,43 +753,173 @@ class WalletScreen(tk.Frame):
             subtitle = "Update this income transaction." if kind == "income" else "Update this expense transaction."
         else:
             subtitle = "Record an income transaction for this wallet." if kind == "income"                        else "Record an expense transaction for this wallet."
-        tk.Label(modal, text=subtitle, bg=BG_WHITE, fg="#616161",
-                 font=font(8)).pack(anchor="w", pady=(0, 14))
+        tk.Label(hdr, text=subtitle, bg=BG_WHITE, fg="#616161",
+                 font=font(8)).pack(anchor="w", pady=0)
 
         err_labels = {}
 
         def _field(parent, label_text, field_key):
             grp = tk.Frame(parent, bg=BG_WHITE)
-            grp.pack(fill="x", pady=(0, 10))
+            grp.pack(fill="x", pady=0)
             tk.Label(grp, text=label_text, bg=BG_WHITE, fg=TEXT_DARK,
-                     font=font(8, "bold")).pack(anchor="w")
+                     font=("Poppins Light", 8)).pack(anchor="w")
             return grp
 
         def _entry(grp, field_key, **kw):
-            e = tk.Entry(grp, font=font(9), bd=1, relief="solid",
-                         highlightbackground=_FILTER_BDR,
-                         highlightthickness=1, **kw)
-            e.pack(fill="x", ipady=6, pady=(3, 0))
-            err = tk.Label(grp, text="", bg=BG_WHITE, fg="#C62828", font=font(7))
+            from PIL import Image, ImageDraw as _ID2
+            R   = 6
+            PAD = R + 1
+            H   = 34
+            cv  = tk.Canvas(grp, bg=BG_WHITE, bd=0, highlightthickness=0, height=H)
+            cv.pack(fill="x", pady=(1, 0))
+            e = tk.Entry(cv, font=font(9), bd=0, relief="flat",
+                         bg="#F9F9F9", fg=TEXT_DARK,
+                         insertbackground=TEXT_DARK, **kw)
+            entry_win = cv.create_window(PAD, H // 2, anchor="w", window=e)
+
+            def _draw(focused=False):
+                w = cv.winfo_width()
+                if w < 4:
+                    return
+                cv.itemconfig(entry_win, width=w - PAD * 2)
+                scale = 4
+                sw, sh = w * scale, H * scale
+                r = R * scale
+                bdr_hex = "#E59E2C" if focused else _FILTER_BDR
+                cr = int(bdr_hex.lstrip("#"), 16)
+                bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+                FILL = "#F9F9F9"
+                bg_cr = int(FILL.lstrip("#"), 16)
+                bg_rgb = ((bg_cr >> 16) & 255, (bg_cr >> 8) & 255, bg_cr & 255)
+                img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+                _ID2.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=bg_rgb + (255,),
+                    outline=bdr_rgb + (255,), width=4)
+                img = img.resize((w, H), Image.LANCZOS)
+                bg_img = Image.new("RGB", (w, H), bg_rgb)
+                bg_img.paste(img, mask=img.split()[3])
+                ph = ImageTk.PhotoImage(bg_img)
+                cv._ph = ph
+                cv.config(bg=FILL)
+                cv.delete("border_bg")
+                cv.create_image(0, 0, anchor="nw", image=ph, tags="border_bg")
+                cv.tag_lower("border_bg")
+
+            cv.bind("<Configure>", lambda e: _draw())
+            e.bind("<FocusIn>",  lambda ev: _draw(focused=True))
+            e.bind("<FocusOut>", lambda ev: _draw(focused=False))
+
+            err = tk.Label(grp, text="", bg=BG_WHITE, fg="#C62828", font=("TkDefaultFont", 1))
             err.pack(anchor="w")
             err_labels[field_key] = err
             return e
 
         def _combobox(grp, field_key, values):
+            from PIL import Image, ImageDraw as _ID2
+            R   = 6
+            PAD = R + 1
+            H   = 34
             var = tk.StringVar()
-            cb = ttk.Combobox(grp, textvariable=var, values=values,
-                              state="readonly", font=font(9))
-            cb.pack(fill="x", pady=(3, 0))
-            err = tk.Label(grp, text="", bg=BG_WHITE, fg="#C62828", font=font(7))
+
+            # fully custom dropdown — no ttk, no black corners ever
+            cv = tk.Canvas(grp, bg=BG_WHITE, bd=0, highlightthickness=0, height=H)
+            cv.pack(fill="x", pady=(1, 0))
+
+            FILL = "#F9F9F9"
+
+            def _draw(focused=False):
+                w = cv.winfo_width()
+                if w < 4:
+                    return
+                scale = 4
+                sw, sh = w * scale, H * scale
+                r = R * scale
+                bdr_hex = "#E59E2C" if focused else _FILTER_BDR
+                cr = int(bdr_hex.lstrip("#"), 16)
+                bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+                bg_cr = int(FILL.lstrip("#"), 16)
+                bg_rgb = ((bg_cr >> 16) & 255, (bg_cr >> 8) & 255, bg_cr & 255)
+                img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+                _ID2.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=bg_rgb + (255,),
+                    outline=bdr_rgb + (255,), width=4)
+                img = img.resize((w, H), Image.LANCZOS)
+                bg_img = Image.new("RGB", (w, H), bg_rgb)
+                bg_img.paste(img, mask=img.split()[3])
+                ph = ImageTk.PhotoImage(bg_img)
+                cv._ph = ph
+                cv.config(bg=FILL)
+                cv.delete("border_bg")
+                cv.create_image(0, 0, anchor="nw", image=ph, tags="border_bg")
+                cv.tag_lower("border_bg")
+                # redraw text + caret on top
+                cv.delete("cb_text")
+                cv.delete("cb_caret")
+                txt = var.get() or "Select…"
+                cv.create_text(PAD + 4, H // 2, anchor="w",
+                               text=txt, fill=TEXT_DARK, font=font(9),
+                               tags="cb_text")
+                cv.create_text(w - PAD - 2, H // 2, anchor="e",
+                               text="▼", fill="#828282", font=font(7),
+                               tags="cb_caret")
+
+            cv.bind("<Configure>", lambda e: _draw())
+            var.trace_add("write", lambda *_: cv.after(0, _draw))
+
+            # dropdown frame
+            drop = tk.Frame(grp.winfo_toplevel(), bg="white",
+                            highlightbackground=_FILTER_BDR, highlightthickness=1)
+            drop._open = False
+
+            def _close_drop():
+                drop.place_forget()
+                drop._open = False
+                _draw(focused=False)
+
+            def _select(val):
+                var.set(val)
+                _close_drop()
+
+            def _toggle(e=None):
+                if drop._open:
+                    _close_drop()
+                    return
+                # rebuild items
+                for w in drop.winfo_children():
+                    w.destroy()
+                for val in values:
+                    item = tk.Label(drop, text=val, bg="white", fg=TEXT_DARK,
+                                    font=font(9), padx=14, pady=6,
+                                    anchor="w", cursor="hand2")
+                    item.pack(fill="x")
+                    item.bind("<Enter>", lambda e, b=item: b.config(bg="#F5F1E8"))
+                    item.bind("<Leave>", lambda e, b=item: b.config(bg="white"))
+                    item.bind("<Button-1>", lambda e, v=val: _select(v))
+                cv.update_idletasks()
+                bx = cv.winfo_rootx() - grp.winfo_toplevel().winfo_rootx()
+                by = cv.winfo_rooty() - grp.winfo_toplevel().winfo_rooty() + H + 2
+                drop.place(x=bx, y=by, width=cv.winfo_width())
+                drop.lift()
+                drop._open = True
+                _draw(focused=True)
+
+            cv.bind("<Button-1>", _toggle)
+            cv.config(cursor="hand2")
+
+            err = tk.Label(grp, text="", bg=BG_WHITE, fg="#C62828", font=("TkDefaultFont", 1))
             err.pack(anchor="w")
             err_labels[field_key] = err
             return var
 
         def _show_err(key, msg):
-            if key in err_labels: err_labels[key].config(text=msg)
+            if key in err_labels:
+                err_labels[key].config(text=msg, font=font(7))
 
         def _clear_err(key):
-            if key in err_labels: err_labels[key].config(text="")
+            if key in err_labels:
+                err_labels[key].config(text="", font=("TkDefaultFont", 1))
 
         grp_date = _field(modal, "Date Issued", "date")
         e_date = _entry(grp_date, "date")
@@ -754,21 +949,55 @@ class WalletScreen(tk.Frame):
         if is_edit: e_price.insert(0, str(existing.get("price", "")))
 
         footer = tk.Frame(modal, bg=BG_WHITE)
-        footer.pack(fill="x", pady=(14, 0))
+        footer.pack(fill="x", pady=(5, 0))
 
-        cancel = tk.Label(footer, text="Cancel", bg=BG_WHITE, fg="#616161",
-                          font=font(9, "bold"), padx=18, pady=8, cursor="hand2",
-                          highlightbackground=_FILTER_BDR, highlightthickness=1)
-        cancel.pack(side="left")
-        cancel.bind("<Button-1>", lambda e: overlay.destroy())
-        cancel.bind("<Enter>", lambda e: cancel.config(bg="#F5F1E8"))
-        cancel.bind("<Leave>", lambda e: cancel.config(bg=BG_WHITE))
+        btn_row = tk.Frame(footer, bg=BG_WHITE)
+        btn_row.pack(side="right")
 
-        save_btn = tk.Label(footer, text="Save", bg=_BTN_BROWN, fg="white",
-                            font=font(9, "bold"), padx=18, pady=8, cursor="hand2")
-        save_btn.pack(side="right")
-        save_btn.bind("<Enter>", lambda e: save_btn.config(bg=_BTN_HOV))
-        save_btn.bind("<Leave>", lambda e: save_btn.config(bg=_BTN_BROWN))
+        def _make_btn(parent, text, bg_hex, hover_hex, fg_color, cmd, fnt=None):
+            from PIL import Image, ImageDraw as _ID3
+            H, R = 32, 16
+            cv = tk.Canvas(parent, bd=0, highlightthickness=0,
+                           bg=BG_WHITE, cursor="hand2", height=H)
+            cv.pack(side="left", padx=(0, 6))
+            _fnt = fnt or font(9, "bold")
+
+            def _draw(hover=False):
+                cv.delete("all")
+                bw = cv.winfo_width() or 90
+                scale = 4
+                sw, sh = bw * scale, H * scale
+                r = R * scale
+                col = hover_hex if hover else bg_hex
+                cr = int(col.lstrip("#"), 16)
+                rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+                img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+                _ID3.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=rgb + (255,))
+                img = img.resize((bw, H), Image.LANCZOS)
+                ph = ImageTk.PhotoImage(img)
+                cv._ph = ph
+                cv.create_image(0, 0, anchor="nw", image=ph)
+                cv.create_text(bw // 2, H // 2, text=text,
+                               fill=fg_color, font=_fnt, anchor="center")
+
+            import tkinter.font as _tkf
+            _mf = _tkf.Font(family=_fnt[0] if isinstance(_fnt, tuple) else "Poppins",
+                            size=_fnt[1] if isinstance(_fnt, tuple) and len(_fnt) > 1 else 9)
+            tw = _mf.measure(text)
+            cv.config(width=tw + 32)
+
+            cv.bind("<Configure>", lambda e: _draw())
+            cv.bind("<Enter>",     lambda e: _draw(hover=True))
+            cv.bind("<Leave>",     lambda e: _draw(hover=False))
+            cv.bind("<Button-1>",  lambda e: cmd())
+            return cv
+
+        _make_btn(btn_row, "Cancel", "#F0EBE3", "#E0D8CE", "#616161",
+                  lambda: overlay.destroy(), fnt=("Poppins Light", 9))
+        _make_btn(btn_row, "Save", _BTN_BROWN, _BTN_HOV, "white",
+                  lambda: _save())
 
         def _save(e=None):
             valid = True
@@ -2511,14 +2740,57 @@ class WalletScreen(tk.Frame):
         for i, r in enumerate(receipts):
             col_i = i % cols
             row_i = i // cols
-            inner.columnconfigure(col_i, weight=1)
+            # fixed width — no weight so cards don't stretch
+            inner.columnconfigure(col_i, weight=0, minsize=220)
             self._receipt_card(inner, row_i, col_i, r, receipts_ico)
 
     def _receipt_card(self, parent, row, col, r, icon):
-        card = tk.Frame(parent, bg=BG_WHITE,
-                        highlightbackground=_FILTER_BDR,
-                        highlightthickness=2, padx=14, pady=14)
-        card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+        from PIL import ImageDraw
+        R   = 8
+        PAD = R + 2
+        BDR_CLR = _FILTER_BDR
+        HOV_CLR = _ACTIVE_TAB
+
+        cv = tk.Canvas(parent, bg=BG_WHITE, bd=0, highlightthickness=0, width=220)
+        cv.grid(row=row, column=col, padx=8, pady=8, sticky="n")
+
+        card = tk.Frame(cv, bg=BG_WHITE, padx=14, pady=14)
+        card_win = cv.create_window(PAD, PAD, anchor="nw", window=card)
+
+        def _draw(hover=False):
+            bw = cv.winfo_width()
+            ch = card.winfo_reqheight()
+            if bw < 4 or ch < 4:
+                return
+            total_h = ch + PAD * 2
+            cv.config(height=total_h)
+            cv.itemconfig(card_win, width=bw - PAD * 2)
+            bdr = HOV_CLR if hover else BDR_CLR
+            scale = 4
+            sw, sh = bw * scale, total_h * scale
+            r = R * scale
+            cr = int(bdr.lstrip("#"), 16)
+            bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+            img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            ImageDraw.Draw(img).rounded_rectangle(
+                [2 * scale, 2 * scale, sw - 1 - 2 * scale, sh - 1 - 2 * scale],
+                radius=r,
+                fill=(255, 255, 255, 255),
+                outline=bdr_rgb + (255,), width=8)
+            img = img.resize((bw, total_h), Image.LANCZOS)
+            bg_img = Image.new("RGB", (bw, total_h), (255, 255, 255))
+            bg_img.paste(img, mask=img.split()[3])
+            ph = ImageTk.PhotoImage(bg_img)
+            cv._ph = ph
+            cv.delete("card_bg")
+            cv.create_image(0, 0, anchor="nw", image=ph, tags="card_bg")
+            cv.tag_lower("card_bg")
+
+        card.bind("<Configure>", lambda e: cv.after(0, _draw))
+        cv.bind("<Configure>",   lambda e: cv.after(0, _draw))
+        for w in (cv, card):
+            w.bind("<Enter>", lambda e: _draw(hover=True))
+            w.bind("<Leave>", lambda e: _draw(hover=False))
 
         # icon area
         ico_frm = tk.Frame(card, bg="#F5F5F5", width=60, height=60)
@@ -2535,33 +2807,36 @@ class WalletScreen(tk.Frame):
         tk.Label(card, text=date, bg=BG_WHITE, fg=TEXT_MUTED,
                  font=font(7)).pack(pady=(2, 10))
 
-        # ── three action buttons ──────────────────────────────────────
+        # ── three action buttons — rounded pills matching web colors ──
         btn_row = tk.Frame(card, bg=BG_WHITE)
-        btn_row.pack()
+        btn_row.pack(fill="x", pady=(4, 0))
 
-        def _action_btn(parent, text, bg, hover_bg, command):
-            b = tk.Label(parent, text=text, bg=bg, fg=TEXT_DARK,
-                         font=font(7, "bold"), padx=8, pady=4, cursor="hand2")
-            b.pack(side="left", padx=2)
-            b.bind("<Button-1>", lambda e: command())
-            b.bind("<Enter>",    lambda e, w=b, hb=hover_bg: w.config(bg=hb))
-            b.bind("<Leave>",    lambda e, w=b, ob=bg:       w.config(bg=ob))
-            return b
-
-        file_path = r.get("file_url") or ""
+        file_path  = r.get("file_url") or ""
         receipt_id = r.get("id")
 
-        _action_btn(btn_row, "View",
-                    bg="#E3F2FD", hover_bg="#BBDEFB",
-                    command=lambda fp=file_path: self._view_receipt(fp))
+        # View — #ECDDC6 bg, black text (matches web)
+        self._make_pill_btn(
+            btn_row, "View",
+            bg_hex="#ECDDC6", hover_hex="#E0C9A6",
+            fg="#000000", width=54, height=26, font_spec=font(7),
+            side="left", padx=(0, 3),
+            command=lambda fp=file_path: self._view_receipt(fp))
 
-        _action_btn(btn_row, "Download",
-                    bg="#E8F5E9", hover_bg="#C8E6C9",
-                    command=lambda fp=file_path: self._download_receipt(fp))
+        # Download — #A24A00 bg, white text (matches web)
+        self._make_pill_btn(
+            btn_row, "Download",
+            bg_hex=_BTN_BROWN, hover_hex=_BTN_HOV,
+            fg="white", width=60, height=26, font_spec=font(7),
+            side="left", padx=(0, 3),
+            command=lambda fp=file_path: self._download_receipt(fp))
 
-        _action_btn(btn_row, "Delete",
-                    bg="#FFEBEE", hover_bg="#FFCDD2",
-                    command=lambda rid=receipt_id: self._confirm_delete_receipt(rid))
+        # Delete — soft red
+        self._make_pill_btn(
+            btn_row, "Delete",
+            bg_hex="#F0F0F0", hover_hex="#FFCDD2",
+            fg="black", width=54, height=26, font_spec=font(7),
+            side="left", padx=0,
+            command=lambda rid=receipt_id: self._confirm_delete_receipt(rid))
 
     def _view_receipt(self, file_path):
         """Download receipt and show in-app image viewer overlay."""
@@ -2796,63 +3071,106 @@ class WalletScreen(tk.Frame):
         if _bg_ph:
             ov_cv.create_image(0, 0, anchor="nw", image=_bg_ph)
             ov_cv._bg_ph = _bg_ph
+            ov_cv._bg_pil = shot
         else:
             ov_cv.config(bg="black")
             ov_cv.create_rectangle(0, 0, rw, rh, fill="black",
                                    stipple="gray50", outline="")
         ov_cv.bind("<Button-1>", lambda e: overlay.destroy())
 
-        modal = tk.Frame(overlay, bg=BG_WHITE, padx=0, pady=0,
-                         highlightbackground="#E0D4C0", highlightthickness=1)
-        modal.place(relx=0.5, rely=0.5, anchor="center", width=440)
+        modal = self._make_rounded_modal(overlay, width=440)
         modal.bind("<Button-1>", lambda e: "break")
 
         # ── header ────────────────────────────────────────────────────
-        hdr = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=18)
+        hdr = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=8)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="Add Receipt", bg=BG_WHITE, fg=TEXT_DARK,
-                 font=font(13, "bold")).pack(side="left")
-        close_lbl = tk.Label(hdr, text="×", bg=BG_WHITE, fg="#616161",
+
+        title_row = tk.Frame(hdr, bg=BG_WHITE)
+        title_row.pack(fill="x")
+        tk.Label(title_row, text="Add Receipt", bg=BG_WHITE, fg=TEXT_DARK,
+                 font=("Playfair Display Bold", 13)).pack(side="left")
+        close_lbl = tk.Label(title_row, text="×", bg=BG_WHITE, fg="#616161",
                              font=("Arial", 20), cursor="hand2", width=2)
         close_lbl.pack(side="right")
         close_lbl.bind("<Button-1>", lambda e: overlay.destroy())
         close_lbl.bind("<Enter>", lambda e: close_lbl.config(bg="#F0F0F0"))
         close_lbl.bind("<Leave>", lambda e: close_lbl.config(bg=BG_WHITE))
-        tk.Frame(modal, bg=_FILTER_BDR, height=2).pack(fill="x")
+        tk.Label(hdr, text="Upload a receipt image for this wallet.",
+                 bg=BG_WHITE, fg="#616161", font=font(8)).pack(anchor="w", pady=0)
 
         # ── body ──────────────────────────────────────────────────────
-        body = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=20)
+        body = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=8)
         body.pack(fill="x")
 
         err_labels = {}
 
         def _lbl_entry(label_text, key, prefill=""):
+            from PIL import Image, ImageDraw as _ID2
             grp = tk.Frame(body, bg=BG_WHITE)
-            grp.pack(fill="x", pady=(0, 10))
+            grp.pack(fill="x", pady=(0, 4))
             tk.Label(grp, text=label_text, bg=BG_WHITE, fg=TEXT_DARK,
-                     font=font(8, "bold")).pack(anchor="w")
-            e = tk.Entry(grp, font=font(10), bd=1, relief="solid",
+                     font=("Poppins Light", 8)).pack(anchor="w")
+            R   = 6
+            PAD = R + 1
+            H   = 30
+            cv  = tk.Canvas(grp, bg=BG_WHITE, bd=0, highlightthickness=0, height=H)
+            cv.pack(fill="x", pady=(1, 0))
+            e = tk.Entry(cv, font=font(10), bd=0, relief="flat",
                          bg="#F9F9F9", fg=TEXT_DARK,
-                         highlightbackground=_FILTER_BDR, highlightthickness=1)
+                         insertbackground=TEXT_DARK)
             e.insert(0, prefill)
-            e.pack(fill="x", ipady=7, pady=(4, 0))
-            err = tk.Label(grp, text="", bg=BG_WHITE, fg="#C62828", font=font(7))
+            entry_win = cv.create_window(PAD, H // 2, anchor="w", window=e)
+
+            def _draw(focused=False):
+                w = cv.winfo_width()
+                if w < 4:
+                    return
+                cv.itemconfig(entry_win, width=w - PAD * 2)
+                scale = 4
+                sw, sh = w * scale, H * scale
+                r = R * scale
+                bdr_hex = "#E59E2C" if focused else _FILTER_BDR
+                cr = int(bdr_hex.lstrip("#"), 16)
+                bdr_rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+                FILL = "#F9F9F9"
+                bg_cr = int(FILL.lstrip("#"), 16)
+                bg_rgb = ((bg_cr >> 16) & 255, (bg_cr >> 8) & 255, bg_cr & 255)
+                img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+                _ID2.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r,
+                    fill=bg_rgb + (255,),
+                    outline=bdr_rgb + (255,), width=4)
+                img = img.resize((w, H), Image.LANCZOS)
+                bg_img = Image.new("RGB", (w, H), bg_rgb)
+                bg_img.paste(img, mask=img.split()[3])
+                ph = ImageTk.PhotoImage(bg_img)
+                cv._ph = ph
+                cv.config(bg=FILL)
+                cv.delete("border_bg")
+                cv.create_image(0, 0, anchor="nw", image=ph, tags="border_bg")
+                cv.tag_lower("border_bg")
+
+            cv.bind("<Configure>", lambda ev: _draw())
+            e.bind("<FocusIn>",  lambda ev: _draw(focused=True))
+            e.bind("<FocusOut>", lambda ev: _draw(focused=False))
+
+            err = tk.Label(grp, text="", bg=BG_WHITE, fg="#C62828", font=("TkDefaultFont", 1))
             err.pack(anchor="w")
             err_labels[key] = err
             return e
 
         e_desc = _lbl_entry("Description", "desc")
-        e_date = _lbl_entry("Receipt Date (YYYY-MM-DD)", "date",
+        e_date = _lbl_entry("Date", "date",
                             prefill=datetime.now().strftime("%Y-%m-%d"))
 
         # file picker row
         file_grp = tk.Frame(body, bg=BG_WHITE)
-        file_grp.pack(fill="x", pady=(0, 4))
-        tk.Label(file_grp, text="File (image or PDF)", bg=BG_WHITE, fg=TEXT_DARK,
-                 font=font(8, "bold")).pack(anchor="w")
+        file_grp.pack(fill="x", pady=(0, 2))
+        tk.Label(file_grp, text="Receipt Image", bg=BG_WHITE, fg=TEXT_DARK,
+                 font=("Poppins Light", 8)).pack(anchor="w")
 
         file_row = tk.Frame(file_grp, bg=BG_WHITE)
-        file_row.pack(fill="x", pady=(4, 0))
+        file_row.pack(fill="x", pady=(2, 0))
 
         file_var = tk.StringVar(value="")
         file_lbl = tk.Label(file_row, textvariable=file_var,
@@ -2889,17 +3207,51 @@ class WalletScreen(tk.Frame):
         err_labels["file"] = err_file
 
         # ── footer ────────────────────────────────────────────────────
-        tk.Frame(modal, bg=_FILTER_BDR, height=2).pack(fill="x")
-        footer = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=16)
+        footer = tk.Frame(modal, bg=BG_WHITE, padx=28, pady=8)
         footer.pack(fill="x")
 
-        cancel_btn = tk.Label(footer, text="Cancel", bg=BG_WHITE, fg="#616161",
-                              font=font(9, "bold"), padx=20, pady=8, cursor="hand2",
-                              highlightbackground=_FILTER_BDR, highlightthickness=1)
-        cancel_btn.pack(side="left")
-        cancel_btn.bind("<Button-1>", lambda e: overlay.destroy())
-        cancel_btn.bind("<Enter>", lambda e: cancel_btn.config(bg="#F5F1E8"))
-        cancel_btn.bind("<Leave>", lambda e: cancel_btn.config(bg=BG_WHITE))
+        btn_row = tk.Frame(footer, bg=BG_WHITE)
+        btn_row.pack(side="right")
+
+        def _make_rbtn(parent, text, bg_hex, hover_hex, fg_color, cmd, fnt=None):
+            from PIL import Image, ImageDraw as _ID3
+            H, R = 32, 16
+            cv = tk.Canvas(parent, bd=0, highlightthickness=0,
+                           bg=BG_WHITE, cursor="hand2", height=H)
+            cv.pack(side="left", padx=(0, 6))
+            _fnt = fnt or font(9, "bold")
+
+            def _draw(hover=False):
+                cv.delete("all")
+                bw = cv.winfo_width() or 90
+                scale = 4
+                sw, sh = bw * scale, H * scale
+                r = R * scale
+                col = hover_hex if hover else bg_hex
+                cr = int(col.lstrip("#"), 16)
+                rgb = ((cr >> 16) & 255, (cr >> 8) & 255, cr & 255)
+                img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+                _ID3.Draw(img).rounded_rectangle(
+                    [0, 0, sw - 1, sh - 1], radius=r, fill=rgb + (255,))
+                img = img.resize((bw, H), Image.LANCZOS)
+                ph = ImageTk.PhotoImage(img)
+                cv._ph = ph
+                cv.create_image(0, 0, anchor="nw", image=ph)
+                cv.create_text(bw // 2, H // 2, text=text,
+                               fill=fg_color, font=_fnt, anchor="center")
+
+            import tkinter.font as _tkf
+            _mf = _tkf.Font(family=_fnt[0] if isinstance(_fnt, tuple) else "Poppins",
+                            size=_fnt[1] if isinstance(_fnt, tuple) and len(_fnt) > 1 else 9)
+            cv.config(width=_mf.measure(text) + 32)
+            cv.bind("<Configure>", lambda e: _draw())
+            cv.bind("<Enter>",     lambda e: _draw(hover=True))
+            cv.bind("<Leave>",     lambda e: _draw(hover=False))
+            cv.bind("<Button-1>",  lambda e: cmd())
+            return cv
+
+        _make_rbtn(btn_row, "Cancel", "#F0EBE3", "#E0D8CE", "#616161",
+                   lambda: overlay.destroy(), fnt=("Poppins Light", 9))
 
         def _show_err(key, msg):
             if key in err_labels:
@@ -2925,7 +3277,6 @@ class WalletScreen(tk.Frame):
             if not valid:
                 return
 
-            save_btn.config(text="Uploading…", bg="#888888")
             overlay.update()
 
             try:
@@ -2949,15 +3300,10 @@ class WalletScreen(tk.Frame):
                 if self._active_tab == "receipts":
                     self._switch_tab("receipts")
             except Exception as ex:
-                save_btn.config(text="Upload", bg=_BTN_BROWN)
                 _show_err("file", f"Upload failed: {str(ex)[:60]}")
 
-        save_btn = tk.Label(footer, text="Upload", bg=_BTN_BROWN, fg="white",
-                            font=font(9, "bold"), padx=20, pady=8, cursor="hand2")
-        save_btn.pack(side="right")
-        save_btn.bind("<Button-1>", _upload)
-        save_btn.bind("<Enter>", lambda e: save_btn.config(bg=_BTN_HOV))
-        save_btn.bind("<Leave>", lambda e: save_btn.config(bg=_BTN_BROWN))
+        _make_rbtn(btn_row, "Upload", _BTN_BROWN, _BTN_HOV, "white",
+                   lambda: _upload())
 
     # ── ARCHIVES TAB ──────────────────────────────────────────────────
     def _tab_archives(self):
